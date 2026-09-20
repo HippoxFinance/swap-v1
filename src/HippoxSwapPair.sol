@@ -9,6 +9,7 @@ import {IHippoxSwapHook} from "./interfaces/IHippoxSwapHook.sol";
 /// @dev Deployed by HippoxSwapFactory via CREATE2, then initialized once.
 ///      All operations rely on balance differences. Callers must transfer tokens in before mint/swap,
 ///      and transfer LP tokens in before burn.
+///      This version also implements an on-chain native TWAP oracle (Uniswap V2 style cumulative prices).
 contract HippoxSwapPair is ERC20 {
     // State
     IERC20 public token0;
@@ -35,6 +36,16 @@ contract HippoxSwapPair is ERC20 {
     address public hook;
     /// @notice Simple reentrancy lock.
     bool private locked;
+    // TWAP Oracle state
+    /// @notice Cumulative price of token0 in terms of token1, multiplied by 2**112.
+    /// @dev price0 = reserve1 / reserve0. Cumulative value is price0 * timeElapsed.
+    uint256 public price0CumulativeLast;
+    /// @notice Cumulative price of token1 in terms of token0, multiplied by 2**112.
+    /// @dev price1 = reserve0 / reserve1. Cumulative value is price1 * timeElapsed.
+    uint256 public price1CumulativeLast;
+    /// @notice Timestamp of the last oracle update.
+    uint32 public blockTimestampLast;
+    // Events
     event AdminUpdated(address indexed previousAdmin, address indexed newAdmin);
     event TaxUpdated(uint256 previousTaxBps, uint256 newTaxBps);
     event TaxRecipientUpdated(
@@ -44,22 +55,6 @@ contract HippoxSwapPair is ERC20 {
     event FeeUpdated(uint256 previousFeeNumerator, uint256 newFeeNumerator);
     event HookUpdated(address indexed previousHook, address indexed newHook);
     event HookCallFailed(address indexed hook, string reason);
-    modifier onlyCreator() {
-        require(msg.sender == creator, "ONLY_CREATOR");
-        _;
-    }
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "ONLY_ADMIN");
-        _;
-    }
-    /// @dev Prevents reentrancy into swap.
-    modifier nonReentrant() {
-        require(!locked, "REENTRANT");
-        locked = true;
-        _;
-        locked = false;
-    }
-    // Events
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
     event Burn(
         address indexed sender,
@@ -76,6 +71,21 @@ contract HippoxSwapPair is ERC20 {
         address indexed to
     );
     event Sync(uint112 reserve0, uint112 reserve1);
+    modifier onlyCreator() {
+        require(msg.sender == creator, "ONLY_CREATOR");
+        _;
+    }
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "ONLY_ADMIN");
+        _;
+    }
+    /// @dev Prevents reentrancy into swap.
+    modifier nonReentrant() {
+        require(!locked, "REENTRANT");
+        locked = true;
+        _;
+        locked = false;
+    }
     // Constructor
     constructor() ERC20("Hippox LP Token", "HIP-LP") {}
     /// @notice One-time initializer called by the factory after CREATE2 deployment.
@@ -179,6 +189,49 @@ contract HippoxSwapPair is ERC20 {
         uint256 numerator = amountInWithFee * reserveOut;
         uint256 denominator = reserveIn * FEE_DENOMINATOR + amountInWithFee;
         amountOut = numerator / denominator;
+    }
+    // Oracle views
+    /// @notice Returns the cumulative prices and the last update timestamp.
+    /// @return _price0CumulativeLast Cumulative price of token0 (price0 * time).
+    /// @return _price1CumulativeLast Cumulative price of token1 (price1 * time).
+    /// @return _blockTimestampLast Last oracle update timestamp.
+    function getCumulativePrices()
+        external
+        view
+        returns (
+            uint256 _price0CumulativeLast,
+            uint256 _price1CumulativeLast,
+            uint32 _blockTimestampLast
+        )
+    {
+        return (price0CumulativeLast, price1CumulativeLast, blockTimestampLast);
+    }
+    /// @notice Computes the time-weighted average price of tokenIn in terms of tokenOut.
+    /// @dev This is a helper for external consumers. It uses the cumulative values
+    ///      stored at two points in time. Callers must pass valid snapshots.
+    /// @param tokenIn Input token address (must be token0 or token1).
+    /// @param amountIn Amount of tokenIn to price.
+    /// @param priceCumulativeLastThen Cumulative value of tokenIn at the earlier timestamp.
+    /// @param priceCumulativeLastNow Cumulative value of tokenIn at the later timestamp.
+    /// @param timeElapsed Elapsed seconds between the two snapshots. Must be > 0.
+    /// @return amountOut TWAP-based output amount.
+    function consult(
+        address tokenIn,
+        uint256 amountIn,
+        uint256 priceCumulativeLastThen,
+        uint256 priceCumulativeLastNow,
+        uint32 timeElapsed
+    ) external view returns (uint256 amountOut) {
+        require(timeElapsed > 0, "INSUFFICIENT_ELAPSED_TIME");
+        require(
+            tokenIn == address(token0) || tokenIn == address(token1),
+            "INVALID_TOKEN"
+        );
+        // priceCumulative is stored as price * 2**112.
+        // Average price = (cumulativeNow - cumulativeThen) / timeElapsed / 2**112.
+        uint256 priceAverageX112 = (priceCumulativeLastNow -
+            priceCumulativeLastThen) / timeElapsed;
+        amountOut = (amountIn * priceAverageX112) >> 112;
     }
     // Liquidity: mint
     function mint(address to) external returns (uint256 liquidity) {
@@ -342,13 +395,37 @@ contract HippoxSwapPair is ERC20 {
         }
     }
     // Internal helpers
+    /// @dev Updates reserves and accumulates TWAP oracle prices.
+    ///      The cumulative values are based on the post-tax balances, so the
+    ///      trading tax does not distort the oracle.
     function _update(uint256 balance0, uint256 balance1) private {
         require(
             balance0 <= type(uint112).max && balance1 <= type(uint112).max,
             "OVERFLOW"
         );
+        // TWAP accumulation
+        uint32 blockTimestamp = uint32(block.timestamp % 2 ** 32);
+        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+        // Only accumulate if time has passed and reserves are non-zero.
+        // The first update (blockTimestampLast == 0) only sets the timestamp.
+        if (
+            timeElapsed > 0 &&
+            reserve0 != 0 &&
+            reserve1 != 0 &&
+            blockTimestampLast != 0
+        ) {
+            // price0 = reserve1 / reserve0, scaled by 2**112.
+            // price1 = reserve0 / reserve1, scaled by 2**112.
+            price0CumulativeLast +=
+                ((uint256(reserve1) << 112) / reserve0) *
+                timeElapsed;
+            price1CumulativeLast +=
+                ((uint256(reserve0) << 112) / reserve1) *
+                timeElapsed;
+        }
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
+        blockTimestampLast = blockTimestamp;
         emit Sync(reserve0, reserve1);
     }
     function _min(uint256 a, uint256 b) private pure returns (uint256) {

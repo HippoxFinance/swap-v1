@@ -35,6 +35,30 @@ interface IHippoxSwapPair {
     function feeNumerator() external view returns (uint256);
     // Hook views.
     function hook() external view returns (address);
+    // Oracle views.
+    /// @notice Cumulative price of token0 in terms of token1, scaled by 2**112.
+    function price0CumulativeLast() external view returns (uint256);
+    /// @notice Cumulative price of token1 in terms of token0, scaled by 2**112.
+    function price1CumulativeLast() external view returns (uint256);
+    /// @notice Timestamp of the last oracle update.
+    function blockTimestampLast() external view returns (uint32);
+    /// @notice Returns cumulative prices and the last update timestamp in one call.
+    function getCumulativePrices()
+        external
+        view
+        returns (
+            uint256 _price0CumulativeLast,
+            uint256 _price1CumulativeLast,
+            uint32 _blockTimestampLast
+        );
+    /// @notice Computes the time-weighted average price of tokenIn in terms of tokenOut.
+    function consult(
+        address tokenIn,
+        uint256 amountIn,
+        uint256 priceCumulativeLastThen,
+        uint256 priceCumulativeLastNow,
+        uint32 timeElapsed
+    ) external view returns (uint256 amountOut);
     // Extended read functions.
     /// @notice Aggregated snapshot of pair state.
     struct PairInfo {
