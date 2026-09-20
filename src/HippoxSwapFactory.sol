@@ -7,19 +7,31 @@ import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
 ///         Also stores the protocol fee parameters so they can be controlled centrally
 ///         and applied uniformly to every pair created by this factory.
 contract HippoxSwapFactory {
-    /// @notice Address that receives the protocol fee. Can be updated by feeToSetter.
+    /// @notice Unique top-level role of the factory. Can update feeTo,
+    ///         protocolFeeNumeratorPercen, and transfer ownership to a new address.
+    address public owner;
+    /// @notice Address that receives the protocol fee. Defaults to the owner
+    ///         at deployment time. Cannot be set to address(0).
     address public feeTo;
-    /// @notice Address allowed to update feeTo, feeToSetter, and the protocol fee numerator.
-    address public feeToSetter;
     mapping(address => mapping(address => address)) public getPair;
     address[] public allPairs;
-    /// @notice Protocol fee numerator relative to the AMM fee.
+    /// @notice Internal protocol fee numerator, in units of 1/1000 of the AMM fee.
     ///         protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to feeTo.
     ///         Stored on the factory so it can be updated centrally and applied
     ///         to every pair created by this factory.
+    ///         A value of 0 means no protocol fee is collected and all of the
+    ///         AMM fee stays with the LPs.
+    ///         MAX_PROTOCOL_FEE_NUMERATOR is 500, meaning the protocol can take
+    ///         up to 50% of the AMM fee (500 / 1000).
     uint256 public constant FEE_DENOMINATOR = 1000;
-    uint256 public constant MAX_PROTOCOL_FEE_NUMERATOR = 5;
+    uint256 public constant MAX_PROTOCOL_FEE_NUMERATOR = 500;
     uint256 public protocolFeeNumerator;
+    /// @notice User-facing maximum, expressed as a percentage of the AMM fee.
+    ///         Must correspond to MAX_PROTOCOL_FEE_NUMERATOR.
+    uint256 public constant MAX_PROTOCOL_FEE_PERCEN = 50;
+    /// @notice Denominator used to convert between percentage and the internal
+    ///         numerator. 100 percent maps to FEE_DENOMINATOR internal units.
+    uint256 public constant PERCENT_DENOMINATOR = 100;
     event PairCreated(
         address indexed token0,
         address indexed token1,
@@ -33,8 +45,21 @@ contract HippoxSwapFactory {
     );
     /// @notice Emitted when the protocol fee recipient changes.
     event FeeToUpdated(address indexed previousFeeTo, address indexed newFeeTo);
-    constructor(address _feeToSetter) {
-        feeToSetter = _feeToSetter;
+    /// @notice Emitted when the owner changes.
+    event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
+    modifier onlyOwner() {
+        require(msg.sender == owner, "ONLY_OWNER");
+        _;
+    }
+    /// @param _owner Initial owner of the factory. Also becomes the initial
+    ///               protocol fee recipient (feeTo). The initial
+    ///               protocol fee is set to 0.5% of the AMM fee.
+    constructor(address _owner) {
+        require(_owner != address(0), "ZERO_OWNER");
+        owner = _owner;
+        feeTo = _owner;
+        // 0.5% expressed in 1/1000 units of the AMM fee.
+        protocolFeeNumerator = 5;
     }
     function allPairsLength() external view returns (uint256) {
         return allPairs.length;
@@ -101,30 +126,48 @@ contract HippoxSwapFactory {
         allPairs.push(pair);
         emit PairCreated(token0, token1, pair, allPairs.length);
     }
-    /// @notice Updates the protocol fee recipient. Only feeToSetter.
-    function setFeeTo(address _feeTo) external {
-        require(msg.sender == feeToSetter, "FORBIDDEN");
+    /// @notice Updates the protocol fee recipient. Only owner.
+    /// @dev feeTo cannot be set to address(0), because a zero recipient would
+    ///      silently drop the protocol fee.
+    function setFeeTo(address _feeTo) external onlyOwner {
+        require(_feeTo != address(0), "ZERO_FEE_TO");
         address previous = feeTo;
         feeTo = _feeTo;
         emit FeeToUpdated(previous, _feeTo);
     }
-    /// @notice Updates the feeToSetter. Only feeToSetter.
-    function setFeeToSetter(address _feeToSetter) external {
-        require(msg.sender == feeToSetter, "FORBIDDEN");
-        feeToSetter = _feeToSetter;
-    }
-    /// @notice Updates the protocol fee numerator. Only feeToSetter.
-    /// @dev The new value applies to every pair created by this factory,
-    ///      because pairs read this value at swap time.
-    function setProtocolFeeNumerator(uint256 _protocolFeeNumerator) external {
-        require(msg.sender == feeToSetter, "FORBIDDEN");
+    /// @notice Updates the protocol fee as a percentage of the AMM fee.
+    ///         Only owner. Range: 0 to 50. A value of 0 means the protocol
+    ///         fee is disabled and the full AMM fee stays with the LPs.
+    /// @dev The percentage is converted to the internal numerator by
+    ///      multiplying by FEE_DENOMINATOR / PERCENT_DENOMINATOR, which is 10.
+    ///      The new value applies to every pair created by this factory,
+    ///      because pairs read the internal numerator at swap time.
+    function setProtocolFeeNumeratorPercen(
+        uint256 _protocolFeeNumeratorPercen
+    ) external onlyOwner {
         require(
-            _protocolFeeNumerator <= MAX_PROTOCOL_FEE_NUMERATOR,
+            _protocolFeeNumeratorPercen <= MAX_PROTOCOL_FEE_PERCEN,
             "PROTOCOL_FEE_TOO_HIGH"
         );
         uint256 previous = protocolFeeNumerator;
-        protocolFeeNumerator = _protocolFeeNumerator;
-        emit ProtocolFeeNumeratorUpdated(previous, _protocolFeeNumerator);
+        // Convert percentage to the internal numerator.
+        // 1 percent = 1/100 of the AMM fee = 10/1000 of the AMM fee.
+        uint256 newNumerator = (_protocolFeeNumeratorPercen * FEE_DENOMINATOR) /
+            PERCENT_DENOMINATOR;
+        protocolFeeNumerator = newNumerator;
+        emit ProtocolFeeNumeratorUpdated(previous, newNumerator);
+    }
+    /// @notice Updates the owner. Only owner.
+    function setOwner(address _owner) external onlyOwner {
+        require(_owner != address(0), "ZERO_OWNER");
+        address previous = owner;
+        owner = _owner;
+        emit OwnerUpdated(previous, _owner);
+    }
+    /// @notice Returns the protocol fee as a percentage of the AMM fee.
+    /// @dev Computed from the internal numerator. Range: 0 to 50.
+    function protocolFeeNumeratorPercen() public view returns (uint256) {
+        return (protocolFeeNumerator * PERCENT_DENOMINATOR) / FEE_DENOMINATOR;
     }
     // Extended read functions
     /// @notice Paginated list of pair addresses.

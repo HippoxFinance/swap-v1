@@ -16,12 +16,19 @@ interface IHippoxSwapFactory {
     );
     /// @notice Emitted when the protocol fee recipient changes.
     event FeeToUpdated(address indexed previousFeeTo, address indexed newFeeTo);
+    /// @notice Emitted when the owner changes.
+    event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
+    /// @notice Unique top-level role of the factory. Can update feeTo,
+    ///         protocolFeeNumerator, and transfer ownership to a new address.
+    function owner() external view returns (address);
+    /// @notice Address that receives the protocol fee.
     function feeTo() external view returns (address);
-    function feeToSetter() external view returns (address);
-    /// @notice Protocol fee numerator, applied as a fraction of the AMM fee.
-    ///         Stored on the factory so it can be controlled centrally and
-    ///         applied uniformly to every pair created by this factory.
+    /// @notice Internal protocol fee numerator, in units of 1/1000 of the AMM fee.
+    ///         Read by the pair at swap time. Range: 0 to 500.
     function protocolFeeNumerator() external view returns (uint256);
+    /// @notice Protocol fee numerator expressed as a percentage of the AMM fee.
+    ///         Range: 0 to 50. This is the user-facing value.
+    function protocolFeeNumeratorPercen() external view returns (uint256);
     function getPair(
         address tokenA,
         address tokenB
@@ -29,48 +36,34 @@ interface IHippoxSwapFactory {
     function allPairs(uint256) external view returns (address pair);
     function allPairsLength() external view returns (uint256);
     /// @notice Creates a pair for tokenA/tokenB.
-    /// @param tokenA First token address.
-    /// @param tokenB Second token address.
-    /// @param creator Address that will own the pair's creator role.
-    /// @return pair Address of the newly created pair.
     function createPair(
         address tokenA,
         address tokenB,
         address creator
     ) external returns (address pair);
     /// @notice Creates a pair with an optional hook installed before initialize.
-    /// @dev The hook address is passed into initialize so that beforeInitialize
-    ///      and afterInitialize can actually fire.
-    /// @param tokenA First token address.
-    /// @param tokenB Second token address.
-    /// @param creator Address that will own the pair's creator role.
-    /// @param hook Hook address, or address(0) for no hook.
-    /// @return pair Address of the newly created pair.
     function createPairWithHook(
         address tokenA,
         address tokenB,
         address creator,
         address hook
     ) external returns (address pair);
-    /// @notice Updates the protocol fee numerator. Only feeToSetter.
-    function setProtocolFeeNumerator(uint256 _protocolFeeNumerator) external;
-    /// @notice Updates the protocol fee recipient. Only feeToSetter.
+    /// @notice Updates the protocol fee as a percentage of the AMM fee.
+    ///         Only owner. Range: 0 to 50. A value of 0 means the protocol
+    ///         fee is disabled and the full AMM fee stays with the LPs.
+    function setProtocolFeeNumeratorPercen(
+        uint256 _protocolFeeNumeratorPercen
+    ) external;
+    /// @notice Updates the protocol fee recipient. Only owner. Cannot be zero.
     function setFeeTo(address _feeTo) external;
-    /// @notice Updates the feeToSetter. Only feeToSetter.
-    function setFeeToSetter(address _feeToSetter) external;
+    /// @notice Updates the owner. Only owner.
+    function setOwner(address _owner) external;
     /// @notice Paginated list of pair addresses.
-    /// @param offset Starting index.
-    /// @param limit Maximum number of addresses to return.
-    /// @return pairs Slice of allPairs.
     function getPairsPaginated(
         uint256 offset,
         uint256 limit
     ) external view returns (address[] memory pairs);
     /// @notice Returns a full snapshot of a pair given two tokens.
-    /// @param tokenA First token address.
-    /// @param tokenB Second token address.
-    /// @return pair Pair address (address(0) if not found).
-    /// @return info PairInfo struct (empty if pair not found).
     function getPairInfo(
         address tokenA,
         address tokenB
