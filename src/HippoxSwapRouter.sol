@@ -5,9 +5,21 @@ import {IHippoxSwapFactory} from "./interfaces/IHippoxSwapFactory.sol";
 import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 import {HippoxSwapLibrary} from "./libs/HippoxSwapLibrary.sol";
+/// @dev Minimal callback interface implemented by the Router to receive
+///      flash swap callbacks from HippoxSwapPair.
+interface IHippoxFlashSwapCallback {
+    function flashSwapCallback(
+        address sender,
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint256 amount0In,
+        uint256 amount1In,
+        bytes calldata data
+    ) external;
+}
 /// @title HippoxSwapRouter
-/// @notice User-facing entry point. Handles slippage protection, ETH wrapping, and multi-hop swaps.
-contract HippoxSwapRouter {
+/// @notice User-facing entry point. Handles slippage protection, ETH wrapping, multi-hop swaps, and flash swaps.
+contract HippoxSwapRouter is IHippoxFlashSwapCallback {
     using HippoxSwapLibrary for address;
     address public immutable factory;
     address public immutable WETH;
@@ -23,6 +35,9 @@ contract HippoxSwapRouter {
         require(msg.sender == WETH, "ONLY_WETH");
     }
     // Liquidity: ERC20/ERC20
+    /// @notice Adds liquidity. If the pair does not exist, it is created
+    ///         without a hook (same behavior as before). Use the overload
+    ///         `addLiquidityWithHook` to install a hook at creation time.
     function addLiquidity(
         address tokenA,
         address tokenB,
@@ -43,7 +58,41 @@ contract HippoxSwapRouter {
             amountADesired,
             amountBDesired,
             amountAMin,
-            amountBMin
+            amountBMin,
+            address(0)
+        );
+        address pair = IHippoxSwapFactory(factory).getPair(tokenA, tokenB);
+        require(pair != address(0), "PAIR_NOT_FOUND");
+        IERC20(tokenA).transferFrom(msg.sender, pair, amountA);
+        IERC20(tokenB).transferFrom(msg.sender, pair, amountB);
+        liquidity = IHippoxSwapPair(pair).mint(to);
+    }
+    /// @notice Adds liquidity and creates the pair with a hook if it does not exist.
+    /// @dev The hook is only used when the pair is being created in this call.
+    ///      If the pair already exists, the hook parameter is ignored.
+    function addLiquidityWithHook(
+        address tokenA,
+        address tokenB,
+        uint256 amountADesired,
+        uint256 amountBDesired,
+        uint256 amountAMin,
+        uint256 amountBMin,
+        address to,
+        uint256 deadline,
+        address hook
+    )
+        external
+        ensure(deadline)
+        returns (uint256 amountA, uint256 amountB, uint256 liquidity)
+    {
+        (amountA, amountB) = _addLiquidity(
+            tokenA,
+            tokenB,
+            amountADesired,
+            amountBDesired,
+            amountAMin,
+            amountBMin,
+            hook
         );
         address pair = IHippoxSwapFactory(factory).getPair(tokenA, tokenB);
         require(pair != address(0), "PAIR_NOT_FOUND");
@@ -74,6 +123,7 @@ contract HippoxSwapRouter {
         );
     }
     // Liquidity: ETH/ERC20
+    /// @notice Adds ETH/token liquidity. Creates the pair without a hook if missing.
     function addLiquidityETH(
         address token,
         uint256 amountTokenDesired,
@@ -93,7 +143,8 @@ contract HippoxSwapRouter {
             amountTokenDesired,
             msg.value,
             amountTokenMin,
-            amountETHMin
+            amountETHMin,
+            address(0)
         );
         address pair = IHippoxSwapFactory(factory).getPair(token, WETH);
         require(pair != address(0), "PAIR_NOT_FOUND");
@@ -102,6 +153,41 @@ contract HippoxSwapRouter {
         IERC20(WETH).transfer(pair, amountETH);
         liquidity = IHippoxSwapPair(pair).mint(to);
         // Refund leftover ETH.
+        if (msg.value > amountETH) {
+            (bool ok, ) = msg.sender.call{value: msg.value - amountETH}("");
+            require(ok, "ETH_REFUND_FAILED");
+        }
+    }
+    /// @notice Adds ETH/token liquidity and creates the pair with a hook if missing.
+    function addLiquidityETHWithHook(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline,
+        address hook
+    )
+        external
+        payable
+        ensure(deadline)
+        returns (uint256 amountToken, uint256 amountETH, uint256 liquidity)
+    {
+        (amountToken, amountETH) = _addLiquidity(
+            token,
+            WETH,
+            amountTokenDesired,
+            msg.value,
+            amountTokenMin,
+            amountETHMin,
+            hook
+        );
+        address pair = IHippoxSwapFactory(factory).getPair(token, WETH);
+        require(pair != address(0), "PAIR_NOT_FOUND");
+        IERC20(token).transferFrom(msg.sender, pair, amountToken);
+        IWETH(WETH).deposit{value: amountETH}();
+        IERC20(WETH).transfer(pair, amountETH);
+        liquidity = IHippoxSwapPair(pair).mint(to);
         if (msg.value > amountETH) {
             (bool ok, ) = msg.sender.call{value: msg.value - amountETH}("");
             require(ok, "ETH_REFUND_FAILED");
@@ -217,11 +303,46 @@ contract HippoxSwapRouter {
         (bool ok, ) = to.call{value: amounts[amounts.length - 1]}("");
         require(ok, "ETH_TRANSFER_FAILED");
     }
+    // Flash swap entry point
+    /// @notice Executes a flash swap on a pair and forwards the callback to
+    ///         the caller's contract. The caller must implement
+    ///         IHippoxFlashSwapCallback and repay the pair before returning.
+    function flashSwap(
+        address pair,
+        uint256 amount0Out,
+        uint256 amount1Out,
+        bytes calldata data
+    ) external {
+        require(pair != address(0), "ZERO_PAIR");
+        IHippoxSwapPair(pair).flashSwap(
+            amount0Out,
+            amount1Out,
+            msg.sender,
+            data
+        );
+    }
+    /// @notice Callback invoked by HippoxSwapPair during a flash swap.
+    function flashSwapCallback(
+        address sender,
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint256 amount0In,
+        uint256 amount1In,
+        bytes calldata data
+    ) external override {
+        // Forward the callback to the original caller. The caller is
+        // responsible for repaying the pair before this call returns.
+        IHippoxFlashSwapCallback(sender).flashSwapCallback(
+            sender,
+            amount0Out,
+            amount1Out,
+            amount0In,
+            amount1In,
+            data
+        );
+    }
     // Extended read functions
     /// @notice Multi-hop quote including AMM fee and trading tax at each hop.
-    /// @param amountIn Input amount.
-    /// @param path Token path, length >= 2.
-    /// @return amounts Output amounts at each hop. amounts[last] is the net user output.
     function quote(
         uint256 amountIn,
         address[] calldata path
@@ -229,9 +350,6 @@ contract HippoxSwapRouter {
         return HippoxSwapLibrary.getAmountsOut(factory, amountIn, path);
     }
     /// @notice Batch multi-hop quotes.
-    /// @param amountsIn Input amounts, one per path.
-    /// @param paths Array of token paths.
-    /// @return results Array of output arrays, one per path.
     function quoteBatch(
         uint256[] calldata amountsIn,
         address[][] calldata paths
@@ -249,16 +367,34 @@ contract HippoxSwapRouter {
     // Internal helpers
     /// @dev Creates the pair if missing. The pair's creator is set to msg.sender
     ///      (the actual end user calling the Router), not to the Router itself.
+    ///      If `hook` is non-zero and the pair is being created, the pair is
+    ///      created via createPairWithHook so that beforeInitialize and
+    ///      afterInitialize actually fire. If the pair already exists, the
+    ///      hook parameter is ignored.
     function _addLiquidity(
         address tokenA,
         address tokenB,
         uint256 amountADesired,
         uint256 amountBDesired,
         uint256 amountAMin,
-        uint256 amountBMin
+        uint256 amountBMin,
+        address hook
     ) internal returns (uint256 amountA, uint256 amountB) {
         if (IHippoxSwapFactory(factory).getPair(tokenA, tokenB) == address(0)) {
-            IHippoxSwapFactory(factory).createPair(tokenA, tokenB, msg.sender);
+            if (hook == address(0)) {
+                IHippoxSwapFactory(factory).createPair(
+                    tokenA,
+                    tokenB,
+                    msg.sender
+                );
+            } else {
+                IHippoxSwapFactory(factory).createPairWithHook(
+                    tokenA,
+                    tokenB,
+                    msg.sender,
+                    hook
+                );
+            }
         }
         (uint256 reserveA, uint256 reserveB) = HippoxSwapLibrary.getReserves(
             factory,

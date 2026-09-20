@@ -27,6 +27,20 @@ interface IHippoxSwapFactory {
         address tokenB,
         address creator
     ) external returns (address pair);
+    /// @notice Creates a pair with an optional hook installed before initialize.
+    /// @dev The hook address is passed into initialize so that beforeInitialize
+    ///      and afterInitialize can actually fire.
+    /// @param tokenA First token address.
+    /// @param tokenB Second token address.
+    /// @param creator Address that will own the pair's creator role.
+    /// @param hook Hook address, or address(0) for no hook.
+    /// @return pair Address of the newly created pair.
+    function createPairWithHook(
+        address tokenA,
+        address tokenB,
+        address creator,
+        address hook
+    ) external returns (address pair);
     /// @notice Paginated list of pair addresses.
     /// @param offset Starting index.
     /// @param limit Maximum number of addresses to return.

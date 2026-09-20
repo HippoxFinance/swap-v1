@@ -21,11 +21,35 @@ contract HippoxSwapFactory {
     function allPairsLength() external view returns (uint256) {
         return allPairs.length;
     }
+    /// @notice Creates a pair without a hook. Kept for backward compatibility.
     function createPair(
         address tokenA,
         address tokenB,
         address creator
     ) external returns (address pair) {
+        return _createPair(tokenA, tokenB, creator, address(0));
+    }
+    /// @notice Creates a pair with an optional hook installed before initialize.
+    /// @dev Passing the hook address into initialize allows beforeInitialize and
+    ///      afterInitialize to actually fire.
+    function createPairWithHook(
+        address tokenA,
+        address tokenB,
+        address creator,
+        address hook
+    ) external returns (address pair) {
+        return _createPair(tokenA, tokenB, creator, hook);
+    }
+    /// @dev Internal pair creation shared by both public entry points.
+    ///      Resolves the protocol fee recipient here so the pair can store it
+    ///      at initialize time. If factory.feeTo is zero, the creator receives
+    ///      the protocol fee (same as Uniswap V2 behavior).
+    function _createPair(
+        address tokenA,
+        address tokenB,
+        address creator,
+        address hook
+    ) internal returns (address pair) {
         require(tokenA != tokenB, "IDENTICAL_ADDRESSES");
         (address token0, address token1) = tokenA < tokenB
             ? (tokenA, tokenB)
@@ -38,8 +62,19 @@ contract HippoxSwapFactory {
         assembly {
             pair := create2(0, add(bytecode, 32), mload(bytecode), salt)
         }
-        address recipient = feeTo == address(0) ? creator : feeTo;
-        HippoxSwapPair(pair).initialize(token0, token1, creator, recipient);
+        // The protocol fee recipient is the factory-level feeTo if set,
+        // otherwise the creator. This is resolved at pair creation time and
+        // stored on the pair. It can be updated later via setFeeTo on the pair.
+        address protocolFeeRecipient = feeTo == address(0) ? creator : feeTo;
+        // initialize now takes the hook and the protocol fee recipient.
+        HippoxSwapPair(pair).initialize(
+            token0,
+            token1,
+            creator,
+            protocolFeeRecipient,
+            hook,
+            protocolFeeRecipient
+        );
         getPair[token0][token1] = pair;
         getPair[token1][token0] = pair;
         allPairs.push(pair);
@@ -55,9 +90,6 @@ contract HippoxSwapFactory {
     }
     // Extended read functions
     /// @notice Paginated list of pair addresses.
-    /// @param offset Starting index.
-    /// @param limit Maximum number of addresses to return.
-    /// @return pairs Slice of allPairs.
     function getPairsPaginated(
         uint256 offset,
         uint256 limit
@@ -76,8 +108,6 @@ contract HippoxSwapFactory {
         }
     }
     /// @notice Returns a full snapshot of a pair given two tokens.
-    /// @dev Returns address(0) and empty bytes if the pair does not exist.
-    ///      Callers should decode `info` as IHippoxSwapPair.PairInfo.
     function getPairInfo(
         address tokenA,
         address tokenB

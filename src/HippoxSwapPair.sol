@@ -4,12 +4,25 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
 import {IHippoxSwapHook} from "./interfaces/IHippoxSwapHook.sol";
+/// @dev Minimal callback interface for flash swaps. The recipient must
+///      implement this and repay the pair before the callback returns.
+interface IHippoxFlashSwapCallback {
+    function flashSwapCallback(
+        address sender,
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint256 amount0In,
+        uint256 amount1In,
+        bytes calldata data
+    ) external;
+}
 /// @title HippoxSwapPair
 /// @notice Constant-product AMM pair for HippoxSwap V1. Holds two token reserves and executes swaps.
 /// @dev Deployed by HippoxSwapFactory via CREATE2, then initialized once.
 ///      All operations rely on balance differences. Callers must transfer tokens in before mint/swap,
 ///      and transfer LP tokens in before burn.
-///      This version also implements an on-chain native TWAP oracle (Uniswap V2 style cumulative prices).
+///      This version also implements an on-chain native TWAP oracle (Uniswap V2 style cumulative prices),
+///      an extended hook interface covering initialization and liquidity modification, and flash swaps.
 contract HippoxSwapPair is ERC20 {
     // State
     IERC20 public token0;
@@ -23,6 +36,14 @@ contract HippoxSwapPair is ERC20 {
     uint256 public constant FEE_DENOMINATOR = 1000;
     uint256 public constant MAX_FEE_NUMERATOR = 10;
     uint256 public feeNumerator = DEFAULT_FEE_NUMERATOR;
+    // Protocol fee: a fraction of the AMM fee that goes to feeTo.
+    /// @notice Protocol fee numerator relative to the AMM fee.
+    ///         protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to feeTo.
+    uint256 public constant DEFAULT_PROTOCOL_FEE_NUMERATOR = 0;
+    uint256 public constant MAX_PROTOCOL_FEE_NUMERATOR = 5;
+    uint256 public protocolFeeNumerator = DEFAULT_PROTOCOL_FEE_NUMERATOR;
+    /// @notice Address that receives the protocol fee. Set at initialize.
+    address public feeTo;
     // Roles and trading tax
     address public creator;
     address public admin;
@@ -44,7 +65,10 @@ contract HippoxSwapPair is ERC20 {
     /// @dev price1 = reserve0 / reserve1. Cumulative value is price1 * timeElapsed.
     uint256 public price1CumulativeLast;
     /// @notice Timestamp of the last oracle update.
-    uint32 public blockTimestampLast;
+    /// @dev uint40 wraps around around year 36,000. The wrap is harmless for
+    ///      the cumulative-price scheme because only differences are used and
+    ///      the wrap is far beyond any realistic deployment lifetime.
+    uint40 public blockTimestampLast;
     // Events
     event AdminUpdated(address indexed previousAdmin, address indexed newAdmin);
     event TaxUpdated(uint256 previousTaxBps, uint256 newTaxBps);
@@ -53,8 +77,27 @@ contract HippoxSwapPair is ERC20 {
         address indexed newRecipient
     );
     event FeeUpdated(uint256 previousFeeNumerator, uint256 newFeeNumerator);
+    event ProtocolFeeUpdated(
+        uint256 previousProtocolFeeNumerator,
+        uint256 newProtocolFeeNumerator
+    );
+    event FeeToUpdated(address indexed previousFeeTo, address indexed newFeeTo);
+    event ProtocolFeeCollected(
+        address indexed feeTo,
+        uint256 amount0,
+        uint256 amount1
+    );
     event HookUpdated(address indexed previousHook, address indexed newHook);
     event HookCallFailed(address indexed hook, string reason);
+    event FlashSwap(
+        address indexed sender,
+        address indexed recipient,
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint256 amount0In,
+        uint256 amount1In,
+        address indexed dataProvider
+    );
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
     event Burn(
         address indexed sender,
@@ -79,7 +122,7 @@ contract HippoxSwapPair is ERC20 {
         require(msg.sender == admin, "ONLY_ADMIN");
         _;
     }
-    /// @dev Prevents reentrancy into swap.
+    /// @dev Prevents reentrancy into swap and flashSwap.
     modifier nonReentrant() {
         require(!locked, "REENTRANT");
         locked = true;
@@ -89,21 +132,58 @@ contract HippoxSwapPair is ERC20 {
     // Constructor
     constructor() ERC20("Hippox LP Token", "HIP-LP") {}
     /// @notice One-time initializer called by the factory after CREATE2 deployment.
+    /// @dev Supports an optional hook address so that beforeInitialize and
+    ///      afterInitialize can actually fire during initialization.
+    /// @param _token0 First token address.
+    /// @param _token1 Second token address.
+    /// @param _creator Address that will own the creator role.
+    /// @param _taxRecipient Address that receives the trading tax.
+    /// @param _hook Optional hook address, or address(0) for no hook.
+    /// @param _feeTo Address that receives the protocol fee. Usually
+    ///               factory.feeTo() or the creator if factory.feeTo() is zero.
     function initialize(
         address _token0,
         address _token1,
         address _creator,
-        address _taxRecipient
+        address _taxRecipient,
+        address _hook,
+        address _feeTo
     ) external {
         require(!initialized, "ALREADY_INITIALIZED");
         require(_token0 != address(0) && _token1 != address(0), "ZERO_ADDRESS");
         require(_token0 != _token1, "IDENTICAL_ADDRESSES");
+        // Install the hook before firing initialize callbacks.
+        hook = _hook;
+        feeTo = _feeTo;
+        // Build the initialize context before state changes.
+        IHippoxSwapHook.InitializeContext memory ctx = IHippoxSwapHook
+            .InitializeContext({
+                sender: msg.sender,
+                txOrigin: tx.origin,
+                token0: _token0,
+                token1: _token1,
+                creator: _creator,
+                admin: _creator,
+                taxRecipient: _taxRecipient == address(0)
+                    ? _creator
+                    : _taxRecipient,
+                feeNumerator: feeNumerator,
+                taxBps: taxBps,
+                blockNumber: block.number,
+                blockTimestamp: block.timestamp,
+                gasPrice: tx.gasprice,
+                gasLeft: gasleft()
+            });
+        // Call beforeInitialize hook.
+        _callBeforeInitialize(ctx);
         initialized = true;
         token0 = IERC20(_token0);
         token1 = IERC20(_token1);
         creator = _creator;
         admin = _creator;
         taxRecipient = _taxRecipient == address(0) ? _creator : _taxRecipient;
+        // Call afterInitialize hook.
+        _callAfterInitialize(ctx);
     }
     // Role management
     function setAdmin(address _newAdmin) external onlyCreator {
@@ -129,6 +209,25 @@ contract HippoxSwapPair is ERC20 {
         uint256 previous = feeNumerator;
         feeNumerator = _feeNumerator;
         emit FeeUpdated(previous, _feeNumerator);
+    }
+    /// @notice Updates the protocol fee numerator. Only admin.
+    function setProtocolFeeNumerator(
+        uint256 _protocolFeeNumerator
+    ) external onlyAdmin {
+        require(
+            _protocolFeeNumerator <= MAX_PROTOCOL_FEE_NUMERATOR,
+            "PROTOCOL_FEE_TOO_HIGH"
+        );
+        uint256 previous = protocolFeeNumerator;
+        protocolFeeNumerator = _protocolFeeNumerator;
+        emit ProtocolFeeUpdated(previous, _protocolFeeNumerator);
+    }
+    /// @notice Updates the protocol fee recipient. Only admin.
+    function setFeeTo(address _feeTo) external onlyAdmin {
+        require(_feeTo != address(0), "ZERO_ADDRESS");
+        address previous = feeTo;
+        feeTo = _feeTo;
+        emit FeeToUpdated(previous, _feeTo);
     }
     // Hook management
     /// @notice Sets or clears the hook. Only the creator can call this.
@@ -165,7 +264,9 @@ contract HippoxSwapPair is ERC20 {
             creator: creator,
             admin: admin,
             minimumLiquidity: MINIMUM_LIQUIDITY,
-            hook: hook
+            hook: hook,
+            protocolFeeNumerator: protocolFeeNumerator,
+            feeTo: feeTo
         });
     }
     /// @notice Single-pool quote including AMM fee and trading tax.
@@ -192,43 +293,30 @@ contract HippoxSwapPair is ERC20 {
     }
     // Oracle views
     /// @notice Returns the cumulative prices and the last update timestamp.
-    /// @return _price0CumulativeLast Cumulative price of token0 (price0 * time).
-    /// @return _price1CumulativeLast Cumulative price of token1 (price1 * time).
-    /// @return _blockTimestampLast Last oracle update timestamp.
     function getCumulativePrices()
         external
         view
         returns (
             uint256 _price0CumulativeLast,
             uint256 _price1CumulativeLast,
-            uint32 _blockTimestampLast
+            uint40 _blockTimestampLast
         )
     {
         return (price0CumulativeLast, price1CumulativeLast, blockTimestampLast);
     }
     /// @notice Computes the time-weighted average price of tokenIn in terms of tokenOut.
-    /// @dev This is a helper for external consumers. It uses the cumulative values
-    ///      stored at two points in time. Callers must pass valid snapshots.
-    /// @param tokenIn Input token address (must be token0 or token1).
-    /// @param amountIn Amount of tokenIn to price.
-    /// @param priceCumulativeLastThen Cumulative value of tokenIn at the earlier timestamp.
-    /// @param priceCumulativeLastNow Cumulative value of tokenIn at the later timestamp.
-    /// @param timeElapsed Elapsed seconds between the two snapshots. Must be > 0.
-    /// @return amountOut TWAP-based output amount.
     function consult(
         address tokenIn,
         uint256 amountIn,
         uint256 priceCumulativeLastThen,
         uint256 priceCumulativeLastNow,
-        uint32 timeElapsed
+        uint40 timeElapsed
     ) external view returns (uint256 amountOut) {
         require(timeElapsed > 0, "INSUFFICIENT_ELAPSED_TIME");
         require(
             tokenIn == address(token0) || tokenIn == address(token1),
             "INVALID_TOKEN"
         );
-        // priceCumulative is stored as price * 2**112.
-        // Average price = (cumulativeNow - cumulativeThen) / timeElapsed / 2**112.
         uint256 priceAverageX112 = (priceCumulativeLastNow -
             priceCumulativeLastThen) / timeElapsed;
         amountOut = (amountIn * priceAverageX112) >> 112;
@@ -251,8 +339,34 @@ contract HippoxSwapPair is ERC20 {
             );
         }
         require(liquidity > 0, "INSUFFICIENT_LIQUIDITY_MINTED");
+        IHippoxSwapHook.ModifyLiquidityContext memory ctx = IHippoxSwapHook
+            .ModifyLiquidityContext({
+                sender: msg.sender,
+                txOrigin: tx.origin,
+                token0: address(token0),
+                token1: address(token1),
+                isMint: true,
+                amount0: amount0,
+                amount1: amount1,
+                liquidity: liquidity,
+                reserve0Before: reserve0,
+                reserve1Before: reserve1,
+                reserve0After: 0,
+                reserve1After: 0,
+                feeNumerator: feeNumerator,
+                taxBps: taxBps,
+                totalSupply: _totalSupply,
+                blockNumber: block.number,
+                blockTimestamp: block.timestamp,
+                gasPrice: tx.gasprice,
+                gasLeft: gasleft()
+            });
+        _callBeforeModifyLiquidity(ctx);
         _mint(to, liquidity);
         _update(balance0, balance1);
+        ctx.reserve0After = reserve0;
+        ctx.reserve1After = reserve1;
+        _callAfterModifyLiquidity(ctx);
         emit Mint(msg.sender, amount0, amount1);
     }
     // Liquidity: burn
@@ -265,6 +379,29 @@ contract HippoxSwapPair is ERC20 {
         amount0 = (liquidity * token0.balanceOf(address(this))) / _totalSupply;
         amount1 = (liquidity * token1.balanceOf(address(this))) / _totalSupply;
         require(amount0 > 0 && amount1 > 0, "INSUFFICIENT_LIQUIDITY_BURNED");
+        IHippoxSwapHook.ModifyLiquidityContext memory ctx = IHippoxSwapHook
+            .ModifyLiquidityContext({
+                sender: msg.sender,
+                txOrigin: tx.origin,
+                token0: address(token0),
+                token1: address(token1),
+                isMint: false,
+                amount0: amount0,
+                amount1: amount1,
+                liquidity: liquidity,
+                reserve0Before: reserve0,
+                reserve1Before: reserve1,
+                reserve0After: 0,
+                reserve1After: 0,
+                feeNumerator: feeNumerator,
+                taxBps: taxBps,
+                totalSupply: _totalSupply,
+                blockNumber: block.number,
+                blockTimestamp: block.timestamp,
+                gasPrice: tx.gasprice,
+                gasLeft: gasleft()
+            });
+        _callBeforeModifyLiquidity(ctx);
         _burn(address(this), liquidity);
         token0.transfer(to, amount0);
         token1.transfer(to, amount1);
@@ -272,6 +409,9 @@ contract HippoxSwapPair is ERC20 {
             token0.balanceOf(address(this)),
             token1.balanceOf(address(this))
         );
+        ctx.reserve0After = reserve0;
+        ctx.reserve1After = reserve1;
+        _callAfterModifyLiquidity(ctx);
         emit Burn(msg.sender, amount0, amount1, to);
     }
     // Swap
@@ -281,6 +421,11 @@ contract HippoxSwapPair is ERC20 {
     ///      emitted as HookCallFailed events.
     /// @dev The constant-product check is inlined to reduce local variables and
     ///      avoid "stack too deep" at compile time.
+    /// @dev Protocol fee is taken out of the AMM fee. If feeTo is non-zero and
+    ///      protocolFeeNumerator > 0, a portion of the input equal to
+    ///      protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to
+    ///      feeTo. User-visible output is unchanged because the protocol fee
+    ///      comes out of the LP share of the fee, not out of the user's output.
     function swap(
         uint256 amount0Out,
         uint256 amount1Out,
@@ -328,6 +473,40 @@ contract HippoxSwapPair is ERC20 {
                 }
             }
         }
+        // Protocol fee: a fraction of the AMM fee is sent to feeTo.
+        // It is taken out of the input, so the LP share is reduced but the
+        // user-visible output is unchanged.
+        if (
+            protocolFeeNumerator > 0 && feeTo != address(0) && feeNumerator > 0
+        ) {
+            uint256 protocol0;
+            uint256 protocol1;
+            if (amount0In > 0) {
+                uint256 totalFee0 = (amount0In * feeNumerator) /
+                    FEE_DENOMINATOR;
+                protocol0 =
+                    (totalFee0 * protocolFeeNumerator) /
+                    FEE_DENOMINATOR;
+                if (protocol0 > 0) {
+                    token0.transfer(feeTo, protocol0);
+                    balance0 -= protocol0;
+                }
+            }
+            if (amount1In > 0) {
+                uint256 totalFee1 = (amount1In * feeNumerator) /
+                    FEE_DENOMINATOR;
+                protocol1 =
+                    (totalFee1 * protocolFeeNumerator) /
+                    FEE_DENOMINATOR;
+                if (protocol1 > 0) {
+                    token1.transfer(feeTo, protocol1);
+                    balance1 -= protocol1;
+                }
+            }
+            if (protocol0 > 0 || protocol1 > 0) {
+                emit ProtocolFeeCollected(feeTo, protocol0, protocol1);
+            }
+        }
         // Build the hook context once. reserve0After / reserve1After are
         // filled in after _update. Using a single struct avoids stack-too-deep.
         IHippoxSwapHook.SwapContext memory ctx = IHippoxSwapHook.SwapContext({
@@ -369,7 +548,137 @@ contract HippoxSwapPair is ERC20 {
         _callAfterSwap(ctx);
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
+    // Flash swap
+    /// @notice Executes a flash swap. Output tokens are sent to `to` first,
+    ///         then `to` is called via `flashSwapCallback`. The recipient must
+    ///         repay the input amount (plus the AMM fee) before returning.
+    /// @dev Logic is split across several private helpers to keep each
+    ///      function's local variable count under the stack limit.
+    function flashSwap(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        address to,
+        bytes calldata data
+    ) external nonReentrant {
+        require(initialized, "NOT_INITIALIZED");
+        require(amount0Out > 0 || amount1Out > 0, "INSUFFICIENT_OUTPUT_AMOUNT");
+        require(
+            amount0Out < reserve0 && amount1Out < reserve1,
+            "INSUFFICIENT_LIQUIDITY"
+        );
+        require(to != address(0), "ZERO_ADDRESS");
+        // Snapshot reserves before the flash swap.
+        uint112 reserve0Before = reserve0;
+        uint112 reserve1Before = reserve1;
+        // Send output tokens to the recipient first.
+        if (amount0Out > 0) token0.transfer(to, amount0Out);
+        if (amount1Out > 0) token1.transfer(to, amount1Out);
+        // Compute the minimum input amounts the recipient must repay.
+        (uint256 amount0In, uint256 amount1In) = _flashSwapAmountsIn(
+            amount0Out,
+            amount1Out,
+            reserve0Before,
+            reserve1Before
+        );
+        // Call the recipient's callback. The recipient must repay before returning.
+        IHippoxFlashSwapCallback(to).flashSwapCallback(
+            msg.sender,
+            amount0Out,
+            amount1Out,
+            amount0In,
+            amount1In,
+            data
+        );
+        // Measure actual balances after the callback and deduct tax.
+        (
+            uint256 balance0,
+            uint256 balance1,
+            uint256 actualAmount0In,
+            uint256 actualAmount1In
+        ) = _flashSwapSettle(
+                amount0Out,
+                amount1Out,
+                reserve0Before,
+                reserve1Before
+            );
+        // Build and fire hooks, check the invariant, and update reserves.
+        _flashSwapFinalize(
+            amount0Out,
+            amount1Out,
+            reserve0Before,
+            reserve1Before,
+            balance0,
+            balance1,
+            actualAmount0In,
+            actualAmount1In
+        );
+        emit FlashSwap(
+            msg.sender,
+            to,
+            amount0Out,
+            amount1Out,
+            actualAmount0In,
+            actualAmount1In,
+            msg.sender
+        );
+    }
     // Hook call helpers
+    /// @dev Calls beforeInitialize. Swallows revert to keep initialization live.
+    function _callBeforeInitialize(
+        IHippoxSwapHook.InitializeContext memory ctx
+    ) private {
+        address h = hook;
+        if (h == address(0)) return;
+        try IHippoxSwapHook(h).beforeInitialize(ctx) {} catch Error(
+            string memory reason
+        ) {
+            emit HookCallFailed(h, reason);
+        } catch {
+            emit HookCallFailed(h, "beforeInitialize failed");
+        }
+    }
+    /// @dev Calls afterInitialize. Swallows revert to keep initialization live.
+    function _callAfterInitialize(
+        IHippoxSwapHook.InitializeContext memory ctx
+    ) private {
+        address h = hook;
+        if (h == address(0)) return;
+        try IHippoxSwapHook(h).afterInitialize(ctx) {} catch Error(
+            string memory reason
+        ) {
+            emit HookCallFailed(h, reason);
+        } catch {
+            emit HookCallFailed(h, "afterInitialize failed");
+        }
+    }
+    /// @dev Calls beforeModifyLiquidity. Swallows revert to keep the operation live.
+    function _callBeforeModifyLiquidity(
+        IHippoxSwapHook.ModifyLiquidityContext memory ctx
+    ) private {
+        address h = hook;
+        if (h == address(0)) return;
+        try IHippoxSwapHook(h).beforeModifyLiquidity(ctx) {} catch Error(
+            string memory reason
+        ) {
+            emit HookCallFailed(h, reason);
+        } catch {
+            emit HookCallFailed(h, "beforeModifyLiquidity failed");
+        }
+    }
+    /// @dev Calls afterModifyLiquidity. Swallows revert to keep the operation live.
+    function _callAfterModifyLiquidity(
+        IHippoxSwapHook.ModifyLiquidityContext memory ctx
+    ) private {
+        address h = hook;
+        if (h == address(0)) return;
+        try IHippoxSwapHook(h).afterModifyLiquidity(ctx) {} catch Error(
+            string memory reason
+        ) {
+            emit HookCallFailed(h, reason);
+        } catch {
+            emit HookCallFailed(h, "afterModifyLiquidity failed");
+        }
+    }
     /// @dev Calls beforeSwap. Swallows revert to keep the swap live.
     function _callBeforeSwap(IHippoxSwapHook.SwapContext memory ctx) private {
         address h = hook;
@@ -395,6 +704,167 @@ contract HippoxSwapPair is ERC20 {
         }
     }
     // Internal helpers
+    /// @dev Computes the minimum input amounts the flash swap recipient must repay.
+    function _flashSwapAmountsIn(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint112 reserve0Before,
+        uint112 reserve1Before
+    ) private view returns (uint256 amount0In, uint256 amount1In) {
+        if (amount0Out > 0) {
+            amount0In = _getAmountIn(
+                amount0Out,
+                uint256(reserve0Before) - amount0Out,
+                uint256(reserve1Before)
+            );
+        }
+        if (amount1Out > 0) {
+            amount1In = _getAmountIn(
+                amount1Out,
+                uint256(reserve1Before) - amount1Out,
+                uint256(reserve0Before)
+            );
+        }
+    }
+    /// @dev Measures balances after the flash swap callback and deducts tax.
+    ///      Returns the post-tax balances and actual input amounts.
+    function _flashSwapSettle(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint112 reserve0Before,
+        uint112 reserve1Before
+    )
+        private
+        returns (
+            uint256 balance0,
+            uint256 balance1,
+            uint256 actualAmount0In,
+            uint256 actualAmount1In
+        )
+    {
+        balance0 = token0.balanceOf(address(this));
+        balance1 = token1.balanceOf(address(this));
+        actualAmount0In = balance0 > uint256(reserve0Before) - amount0Out
+            ? balance0 - (uint256(reserve0Before) - amount0Out)
+            : 0;
+        actualAmount1In = balance1 > uint256(reserve1Before) - amount1Out
+            ? balance1 - (uint256(reserve1Before) - amount1Out)
+            : 0;
+        require(
+            actualAmount0In > 0 || actualAmount1In > 0,
+            "INSUFFICIENT_INPUT_AMOUNT"
+        );
+        if (taxBps > 0 && taxRecipient != address(0)) {
+            if (actualAmount0In > 0) {
+                uint256 tax0 = (actualAmount0In * taxBps) / BPS_DENOMINATOR;
+                if (tax0 > 0) {
+                    token0.transfer(taxRecipient, tax0);
+                    balance0 -= tax0;
+                    actualAmount0In -= tax0;
+                }
+            }
+            if (actualAmount1In > 0) {
+                uint256 tax1 = (actualAmount1In * taxBps) / BPS_DENOMINATOR;
+                if (tax1 > 0) {
+                    token1.transfer(taxRecipient, tax1);
+                    balance1 -= tax1;
+                    actualAmount1In -= tax1;
+                }
+            }
+        }
+        // Protocol fee on flash swap repayment, same logic as the regular swap.
+        if (
+            protocolFeeNumerator > 0 && feeTo != address(0) && feeNumerator > 0
+        ) {
+            uint256 protocol0;
+            uint256 protocol1;
+            if (actualAmount0In > 0) {
+                uint256 totalFee0 = (actualAmount0In * feeNumerator) /
+                    FEE_DENOMINATOR;
+                protocol0 =
+                    (totalFee0 * protocolFeeNumerator) /
+                    FEE_DENOMINATOR;
+                if (protocol0 > 0) {
+                    token0.transfer(feeTo, protocol0);
+                    balance0 -= protocol0;
+                }
+            }
+            if (actualAmount1In > 0) {
+                uint256 totalFee1 = (actualAmount1In * feeNumerator) /
+                    FEE_DENOMINATOR;
+                protocol1 =
+                    (totalFee1 * protocolFeeNumerator) /
+                    FEE_DENOMINATOR;
+                if (protocol1 > 0) {
+                    token1.transfer(feeTo, protocol1);
+                    balance1 -= protocol1;
+                }
+            }
+            if (protocol0 > 0 || protocol1 > 0) {
+                emit ProtocolFeeCollected(feeTo, protocol0, protocol1);
+            }
+        }
+    }
+    /// @dev Builds hook context, fires hooks, checks the invariant, and updates reserves.
+    function _flashSwapFinalize(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        uint112 reserve0Before,
+        uint112 reserve1Before,
+        uint256 balance0,
+        uint256 balance1,
+        uint256 actualAmount0In,
+        uint256 actualAmount1In
+    ) private {
+        IHippoxSwapHook.SwapContext memory ctx = IHippoxSwapHook.SwapContext({
+            sender: msg.sender,
+            txOrigin: tx.origin,
+            token0: address(token0),
+            token1: address(token1),
+            amount0In: actualAmount0In,
+            amount1In: actualAmount1In,
+            amount0Out: amount0Out,
+            amount1Out: amount1Out,
+            reserve0Before: reserve0Before,
+            reserve1Before: reserve1Before,
+            reserve0After: 0,
+            reserve1After: 0,
+            feeNumerator: feeNumerator,
+            taxBps: taxBps,
+            totalSupply: totalSupply(),
+            blockNumber: block.number,
+            blockTimestamp: block.timestamp,
+            gasPrice: tx.gasprice,
+            gasLeft: gasleft()
+        });
+        _callBeforeSwap(ctx);
+        require(
+            (balance0 * FEE_DENOMINATOR - actualAmount0In * feeNumerator) *
+                (balance1 * FEE_DENOMINATOR - actualAmount1In * feeNumerator) >=
+                (uint256(reserve0Before) - amount0Out) *
+                    (uint256(reserve1Before) - amount1Out) *
+                    FEE_DENOMINATOR ** 2,
+            "K"
+        );
+        _update(balance0, balance1);
+        ctx.reserve0After = reserve0;
+        ctx.reserve1After = reserve1;
+        _callAfterSwap(ctx);
+    }
+    /// @dev Computes the input amount required for a given output amount,
+    ///      using the same fee formula as the regular swap path.
+    function _getAmountIn(
+        uint256 amountOut,
+        uint256 reserveIn,
+        uint256 reserveOut
+    ) private view returns (uint256 amountIn) {
+        require(amountOut > 0, "INSUFFICIENT_OUTPUT_AMOUNT");
+        require(reserveIn > 0 && reserveOut > 0, "INSUFFICIENT_LIQUIDITY");
+        uint256 numerator = reserveIn * amountOut * FEE_DENOMINATOR;
+        uint256 denominator = (reserveOut - amountOut) *
+            (FEE_DENOMINATOR - feeNumerator);
+        amountIn = (numerator / denominator) + 1;
+    }
     /// @dev Updates reserves and accumulates TWAP oracle prices.
     ///      The cumulative values are based on the post-tax balances, so the
     ///      trading tax does not distort the oracle.
@@ -404,8 +874,8 @@ contract HippoxSwapPair is ERC20 {
             "OVERFLOW"
         );
         // TWAP accumulation
-        uint32 blockTimestamp = uint32(block.timestamp % 2 ** 32);
-        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+        uint40 blockTimestamp = uint40(block.timestamp);
+        uint40 timeElapsed = blockTimestamp - blockTimestampLast;
         // Only accumulate if time has passed and reserves are non-zero.
         // The first update (blockTimestampLast == 0) only sets the timestamp.
         if (
