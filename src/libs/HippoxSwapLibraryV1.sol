@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import {IHippoxSwapPair} from "../interfaces/IHippoxSwapPair.sol";
-/// @title HippoxSwapLibrary
+import {IHippoxSwapPairV1} from "../interfaces/IHippoxSwapPairV1.sol";
+/// @title HippoxSwapLibraryV1
 /// @notice Helper functions for token sorting, reserve queries, and swap amount calculation.
-library HippoxSwapLibrary {
+library HippoxSwapLibraryV1 {
     uint256 internal constant FEE_DENOMINATOR = 1000;
     uint256 internal constant BPS_DENOMINATOR = 10_000;
     function sortTokens(
@@ -27,17 +27,17 @@ library HippoxSwapLibrary {
             tokenB
         );
         require(pair != address(0), "PAIR_NOT_FOUND");
-        (uint112 reserve0, uint112 reserve1) = IHippoxSwapPair(pair)
+        (uint112 reserve0, uint112 reserve1) = IHippoxSwapPairV1(pair)
             .getReserves();
         (reserveA, reserveB) = tokenA == token0
             ? (uint256(reserve0), uint256(reserve1))
             : (uint256(reserve1), uint256(reserve0));
     }
     function getFeeNumerator(address pair) internal view returns (uint256) {
-        return IHippoxSwapPair(pair).feeNumerator();
+        return IHippoxSwapPairV1(pair).feeNumerator();
     }
     function getTaxBps(address pair) internal view returns (uint256) {
-        return IHippoxSwapPair(pair).taxBps();
+        return IHippoxSwapPairV1(pair).taxBps();
     }
     function quote(
         uint256 amountA,

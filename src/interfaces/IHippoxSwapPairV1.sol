@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-/// @title IHippoxSwapPair
+/// @title IHippoxSwapPairV1
 /// @notice Interface for the HippoxSwap pair contract.
-interface IHippoxSwapPair {
+interface IHippoxSwapPairV1 {
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
     event Burn(
         address indexed sender,

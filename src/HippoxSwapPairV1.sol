@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
-import {IHippoxSwapHook} from "./interfaces/IHippoxSwapHook.sol";
+import {IHippoxSwapPairV1} from "./interfaces/IHippoxSwapPairV1.sol";
+import {IHippoxSwapHookV1} from "./interfaces/IHippoxSwapHookV1.sol";
 /// @dev Minimal callback interface for flash swaps. The recipient must
 ///      implement this and repay the pair before the callback returns.
 interface IHippoxFlashSwapCallback {
@@ -22,7 +22,7 @@ interface IHippoxSwapFactoryMinimalForPair {
     function protocolFeeNumerator() external view returns (uint256);
     function feeTo() external view returns (address);
 }
-/// @title HippoxSwapPair
+/// @title HippoxSwapPairV1
 /// @notice Constant-product AMM pair for HippoxSwap V1. Holds two token reserves and executes swaps.
 /// @dev Deployed by HippoxSwapFactory via CREATE2, then initialized once.
 ///      All operations rely on balance differences. Callers must transfer tokens in before mint/swap,
@@ -31,7 +31,7 @@ interface IHippoxSwapFactoryMinimalForPair {
 ///      an extended hook interface covering initialization and liquidity modification, and flash swaps.
 ///      Protocol fee parameters are stored on the factory and read at swap time, so the
 ///      factory can adjust them centrally for all pairs.
-contract HippoxSwapPair is ERC20 {
+contract HippoxSwapPairV1 is ERC20 {
     // State
     IERC20 public token0;
     IERC20 public token1;
@@ -155,7 +155,7 @@ contract HippoxSwapPair is ERC20 {
         hook = _hook;
         factory = _factory;
         // Build the initialize context before state changes.
-        IHippoxSwapHook.InitializeContext memory ctx = IHippoxSwapHook
+        IHippoxSwapHookV1.InitializeContext memory ctx = IHippoxSwapHookV1
             .InitializeContext({
                 sender: msg.sender,
                 txOrigin: tx.origin,
@@ -234,9 +234,9 @@ contract HippoxSwapPair is ERC20 {
     function getPairInfo()
         external
         view
-        returns (IHippoxSwapPair.PairInfo memory info)
+        returns (IHippoxSwapPairV1.PairInfo memory info)
     {
-        info = IHippoxSwapPair.PairInfo({
+        info = IHippoxSwapPairV1.PairInfo({
             token0: address(token0),
             token1: address(token1),
             reserve0: reserve0,
@@ -327,7 +327,7 @@ contract HippoxSwapPair is ERC20 {
             );
         }
         require(liquidity > 0, "INSUFFICIENT_LIQUIDITY_MINTED");
-        IHippoxSwapHook.ModifyLiquidityContext memory ctx = IHippoxSwapHook
+        IHippoxSwapHookV1.ModifyLiquidityContext memory ctx = IHippoxSwapHookV1
             .ModifyLiquidityContext({
                 sender: msg.sender,
                 txOrigin: tx.origin,
@@ -367,7 +367,7 @@ contract HippoxSwapPair is ERC20 {
         amount0 = (liquidity * token0.balanceOf(address(this))) / _totalSupply;
         amount1 = (liquidity * token1.balanceOf(address(this))) / _totalSupply;
         require(amount0 > 0 && amount1 > 0, "INSUFFICIENT_LIQUIDITY_BURNED");
-        IHippoxSwapHook.ModifyLiquidityContext memory ctx = IHippoxSwapHook
+        IHippoxSwapHookV1.ModifyLiquidityContext memory ctx = IHippoxSwapHookV1
             .ModifyLiquidityContext({
                 sender: msg.sender,
                 txOrigin: tx.origin,
@@ -504,7 +504,7 @@ contract HippoxSwapPair is ERC20 {
         }
         // Build the hook context once. reserve0After / reserve1After are
         // filled in after _update. Using a single struct avoids stack-too-deep.
-        IHippoxSwapHook.SwapContext memory ctx = IHippoxSwapHook.SwapContext({
+        IHippoxSwapHookV1.SwapContext memory ctx = IHippoxSwapHookV1.SwapContext({
             sender: msg.sender,
             txOrigin: tx.origin,
             token0: address(token0),
@@ -620,11 +620,11 @@ contract HippoxSwapPair is ERC20 {
     // Hook call helpers
     /// @dev Calls beforeInitialize. Swallows revert to keep initialization live.
     function _callBeforeInitialize(
-        IHippoxSwapHook.InitializeContext memory ctx
+        IHippoxSwapHookV1.InitializeContext memory ctx
     ) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).beforeInitialize(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).beforeInitialize(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -634,11 +634,11 @@ contract HippoxSwapPair is ERC20 {
     }
     /// @dev Calls afterInitialize. Swallows revert to keep initialization live.
     function _callAfterInitialize(
-        IHippoxSwapHook.InitializeContext memory ctx
+        IHippoxSwapHookV1.InitializeContext memory ctx
     ) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).afterInitialize(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).afterInitialize(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -648,11 +648,11 @@ contract HippoxSwapPair is ERC20 {
     }
     /// @dev Calls beforeModifyLiquidity. Swallows revert to keep the operation live.
     function _callBeforeModifyLiquidity(
-        IHippoxSwapHook.ModifyLiquidityContext memory ctx
+        IHippoxSwapHookV1.ModifyLiquidityContext memory ctx
     ) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).beforeModifyLiquidity(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).beforeModifyLiquidity(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -662,11 +662,11 @@ contract HippoxSwapPair is ERC20 {
     }
     /// @dev Calls afterModifyLiquidity. Swallows revert to keep the operation live.
     function _callAfterModifyLiquidity(
-        IHippoxSwapHook.ModifyLiquidityContext memory ctx
+        IHippoxSwapHookV1.ModifyLiquidityContext memory ctx
     ) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).afterModifyLiquidity(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).afterModifyLiquidity(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -675,10 +675,10 @@ contract HippoxSwapPair is ERC20 {
         }
     }
     /// @dev Calls beforeSwap. Swallows revert to keep the swap live.
-    function _callBeforeSwap(IHippoxSwapHook.SwapContext memory ctx) private {
+    function _callBeforeSwap(IHippoxSwapHookV1.SwapContext memory ctx) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).beforeSwap(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).beforeSwap(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -687,10 +687,10 @@ contract HippoxSwapPair is ERC20 {
         }
     }
     /// @dev Calls afterSwap. Swallows revert to keep the swap live.
-    function _callAfterSwap(IHippoxSwapHook.SwapContext memory ctx) private {
+    function _callAfterSwap(IHippoxSwapHookV1.SwapContext memory ctx) private {
         address h = hook;
         if (h == address(0)) return;
-        try IHippoxSwapHook(h).afterSwap(ctx) {} catch Error(
+        try IHippoxSwapHookV1(h).afterSwap(ctx) {} catch Error(
             string memory reason
         ) {
             emit HookCallFailed(h, reason);
@@ -818,7 +818,7 @@ contract HippoxSwapPair is ERC20 {
         uint256 actualAmount0In,
         uint256 actualAmount1In
     ) private {
-        IHippoxSwapHook.SwapContext memory ctx = IHippoxSwapHook.SwapContext({
+        IHippoxSwapHookV1.SwapContext memory ctx = IHippoxSwapHookV1.SwapContext({
             sender: msg.sender,
             txOrigin: tx.origin,
             token0: address(token0),

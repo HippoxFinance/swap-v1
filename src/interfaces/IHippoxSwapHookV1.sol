@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-/// @title IHippoxSwapHook
+/// @title IHippoxSwapHookV1
 /// @notice Optional hook interface for HippoxSwapPair swaps and liquidity events.
 /// @dev Hooks receive a single context struct to avoid stack-too-deep in
 ///      the pair's functions. Hooks MUST NOT move funds, MUST NOT revert
 ///      the main operation on failure, and MUST NOT reenter.
-interface IHippoxSwapHook {
+interface IHippoxSwapHookV1 {
     /// @notice Full context of a swap, passed to both beforeSwap and afterSwap.
     /// @dev reserve0After / reserve1After are zero in beforeSwap and filled in
     ///      afterSwap. All other fields are populated for both calls.

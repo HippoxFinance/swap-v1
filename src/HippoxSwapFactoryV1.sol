@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import {HippoxSwapPair} from "./HippoxSwapPair.sol";
-import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
-/// @title HippoxSwapFactory
+import {HippoxSwapPairV1} from "./HippoxSwapPairV1.sol";
+import {IHippoxSwapPairV1} from "./interfaces/IHippoxSwapPairV1.sol";
+/// @title HippoxSwapFactoryV1
 /// @notice Creates and indexes one unique pair per token pair. Uses CREATE2 for deterministic addresses.
 ///         Also stores the protocol fee parameters so they can be controlled centrally
 ///         and applied uniformly to every pair created by this factory.
-contract HippoxSwapFactory {
+contract HippoxSwapFactoryV1 {
     /// @notice Unique top-level role of the factory. Can update feeTo,
     ///         protocolFeeNumeratorPercen, and transfer ownership to a new address.
     address public owner;
@@ -103,7 +103,7 @@ contract HippoxSwapFactory {
         require(token0 != address(0), "ZERO_ADDRESS");
         require(creator != address(0), "ZERO_CREATOR");
         require(getPair[token0][token1] == address(0), "PAIR_EXISTS");
-        bytes memory bytecode = type(HippoxSwapPair).creationCode;
+        bytes memory bytecode = type(HippoxSwapPairV1).creationCode;
         bytes32 salt = keccak256(abi.encodePacked(token0, token1));
         assembly {
             pair := create2(0, add(bytecode, 32), mload(bytecode), salt)
@@ -113,7 +113,7 @@ contract HippoxSwapFactory {
         address tradingTaxRecipient = creator;
         // The factory passes its own address to the pair so the pair can read
         // the protocol fee parameters at swap time.
-        HippoxSwapPair(pair).initialize(
+        HippoxSwapPairV1(pair).initialize(
             token0,
             token1,
             creator,
@@ -197,7 +197,7 @@ contract HippoxSwapFactory {
         if (pair == address(0)) {
             return (address(0), "");
         }
-        IHippoxSwapPair.PairInfo memory pi = IHippoxSwapPair(pair)
+        IHippoxSwapPairV1.PairInfo memory pi = IHippoxSwapPairV1(pair)
             .getPairInfo();
         info = abi.encode(pi);
     }

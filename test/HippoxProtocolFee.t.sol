@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
@@ -26,8 +26,8 @@ contract MockToken is ERC20 {
 ///         and converts it into the internal numerator (0 to 500) stored on
 ///         the factory.
 contract HippoxProtocolFeeTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -42,8 +42,8 @@ contract HippoxProtocolFeeTest is Test {
         weth = new WETH();
         // owner is the initial owner of the factory.
         vm.prank(owner);
-        factory = new HippoxSwapFactory(owner);
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(owner);
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenC = new MockToken("TokenC", "C", 18);
@@ -92,7 +92,7 @@ contract HippoxProtocolFeeTest is Test {
     function testDefaultFeeToIsOwner() public view {
         assertEq(factory.feeTo(), owner, "feeTo defaults to owner");
         assertEq(
-            HippoxSwapPair(pair).feeTo(),
+            HippoxSwapPairV1(pair).feeTo(),
             owner,
             "pair reads owner as feeTo"
         );
@@ -110,7 +110,7 @@ contract HippoxProtocolFeeTest is Test {
             "percen reads 0 due to integer division"
         );
         assertEq(
-            HippoxSwapPair(pair).protocolFeeNumerator(),
+            HippoxSwapPairV1(pair).protocolFeeNumerator(),
             5,
             "pair reads internal numerator"
         );
@@ -140,12 +140,12 @@ contract HippoxProtocolFeeTest is Test {
             "internal numerator is 50"
         );
         assertEq(
-            HippoxSwapPair(pair).protocolFeeNumerator(),
+            HippoxSwapPairV1(pair).protocolFeeNumerator(),
             50,
             "pair reads 50"
         );
         assertEq(
-            HippoxSwapPair(pair2).protocolFeeNumerator(),
+            HippoxSwapPairV1(pair2).protocolFeeNumerator(),
             50,
             "pair2 reads 50"
         );
@@ -192,12 +192,12 @@ contract HippoxProtocolFeeTest is Test {
         factory.setFeeTo(feeRecipient);
         assertEq(factory.feeTo(), feeRecipient, "factory feeTo set");
         assertEq(
-            HippoxSwapPair(pair).feeTo(),
+            HippoxSwapPairV1(pair).feeTo(),
             feeRecipient,
             "pair reads new feeTo"
         );
         assertEq(
-            HippoxSwapPair(pair2).feeTo(),
+            HippoxSwapPairV1(pair2).feeTo(),
             feeRecipient,
             "pair2 reads new feeTo"
         );
@@ -427,12 +427,12 @@ contract HippoxProtocolFeeTest is Test {
         // Pair reads from factory on every call, no caching.
         // 5 percent = internal 50.
         assertEq(
-            HippoxSwapPair(pair).protocolFeeNumerator(),
+            HippoxSwapPairV1(pair).protocolFeeNumerator(),
             50,
             "pair reads factory internal numerator"
         );
         assertEq(
-            HippoxSwapPair(pair).feeTo(),
+            HippoxSwapPairV1(pair).feeTo(),
             feeRecipient,
             "pair reads factory feeTo"
         );
@@ -448,12 +448,12 @@ contract HippoxProtocolFeeTest is Test {
         // pair reads the factory values on the flash swap path.
         // 5 percent = internal 50.
         assertEq(
-            HippoxSwapPair(pair).protocolFeeNumerator(),
+            HippoxSwapPairV1(pair).protocolFeeNumerator(),
             50,
             "flash swap reads factory value"
         );
         assertEq(
-            HippoxSwapPair(pair).feeTo(),
+            HippoxSwapPairV1(pair).feeTo(),
             feeRecipient,
             "flash swap reads factory feeTo"
         );

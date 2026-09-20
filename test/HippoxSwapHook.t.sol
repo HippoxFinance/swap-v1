@@ -2,13 +2,13 @@
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
-import {IHippoxSwapHook} from "../src/interfaces/IHippoxSwapHook.sol";
+import {IHippoxSwapHookV1} from "../src/interfaces/IHippoxSwapHookV1.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IHippoxSwapPair} from "../src/interfaces/IHippoxSwapPair.sol";
+import {IHippoxSwapPairV1} from "../src/interfaces/IHippoxSwapPairV1.sol";
 contract MockToken is ERC20 {
     uint8 private _dec;
     constructor(string memory n, string memory s, uint8 d) ERC20(n, s) {
@@ -22,7 +22,7 @@ contract MockToken is ERC20 {
     }
 }
 /// @dev Good hook that records the last context it received for every callback.
-contract GoodHook is IHippoxSwapHook {
+contract GoodHook is IHippoxSwapHookV1 {
     uint256 public beforeInitializeCount;
     uint256 public afterInitializeCount;
     uint256 public beforeModifyLiquidityCount;
@@ -107,7 +107,7 @@ contract GoodHook is IHippoxSwapHook {
     }
 }
 /// @dev Hook that reverts on every callback.
-contract RevertingHook is IHippoxSwapHook {
+contract RevertingHook is IHippoxSwapHookV1 {
     function beforeInitialize(
         InitializeContext calldata
     ) external pure override {
@@ -142,13 +142,13 @@ contract RevertingHook is IHippoxSwapHook {
     }
 }
 /// @dev Hook that tries to reenter mint, burn, and swap.
-contract ReentrantHook is IHippoxSwapHook {
-    HippoxSwapPair public pair;
+contract ReentrantHook is IHippoxSwapHookV1 {
+    HippoxSwapPairV1 public pair;
     bool public attemptedMint;
     bool public attemptedBurn;
     bool public attemptedSwap;
     function setPair(address _pair) external {
-        pair = HippoxSwapPair(_pair);
+        pair = HippoxSwapPairV1(_pair);
     }
     function beforeInitialize(InitializeContext calldata) external override {}
     function afterInitialize(InitializeContext calldata) external override {}
@@ -185,8 +185,8 @@ contract ReentrantHook is IHippoxSwapHook {
 /// @notice Tests for the extended hook mechanism, covering initialize,
 ///         modify liquidity, and swap callbacks.
 contract HippoxSwapHookTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -195,8 +195,8 @@ contract HippoxSwapHookTest is Test {
     address pair;
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenA.mint(alice, 10_000_000e18);
@@ -220,7 +220,11 @@ contract HippoxSwapHookTest is Test {
     }
     // Default: no hook
     function testDefaultNoHook() public view {
-        assertEq(HippoxSwapPair(pair).hook(), address(0), "no hook by default");
+        assertEq(
+            HippoxSwapPairV1(pair).hook(),
+            address(0),
+            "no hook by default"
+        );
     }
     function testSwapWorksWithoutHook() public {
         address[] memory path = new address[](2);
@@ -240,19 +244,19 @@ contract HippoxSwapHookTest is Test {
         GoodHook h = new GoodHook();
         vm.prank(bob);
         vm.expectRevert(bytes("ONLY_CREATOR"));
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
-        assertEq(HippoxSwapPair(pair).hook(), address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
+        assertEq(HippoxSwapPairV1(pair).hook(), address(h));
     }
     function testCreatorCanClearHook() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
-        assertEq(HippoxSwapPair(pair).hook(), address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
+        assertEq(HippoxSwapPairV1(pair).hook(), address(h));
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(0));
-        assertEq(HippoxSwapPair(pair).hook(), address(0));
+        HippoxSwapPairV1(pair).setHook(address(0));
+        assertEq(HippoxSwapPairV1(pair).hook(), address(0));
     }
     /// @notice Verifies that setHook emits the HookUpdated event by scanning
     ///         the recorded logs for the matching event signature.
@@ -260,7 +264,7 @@ contract HippoxSwapHookTest is Test {
         GoodHook h = new GoodHook();
         vm.prank(alice);
         vm.recordLogs();
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 expectedTopic = keccak256("HookUpdated(address,address)");
         bool found;
@@ -276,7 +280,7 @@ contract HippoxSwapHookTest is Test {
     function testInitializeHookNotCalledAfterTheFact() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         assertEq(h.beforeInitializeCount(), 0, "no retroactive beforeInit");
         assertEq(h.afterInitializeCount(), 0, "no retroactive afterInit");
     }
@@ -292,7 +296,7 @@ contract HippoxSwapHookTest is Test {
         );
         assertTrue(freshPair != address(0), "fresh pair created");
         assertEq(
-            HippoxSwapPair(freshPair).hook(),
+            HippoxSwapPairV1(freshPair).hook(),
             address(h),
             "hook installed"
         );
@@ -303,7 +307,7 @@ contract HippoxSwapHookTest is Test {
     function testModifyLiquidityHooksOnMint() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -318,9 +322,9 @@ contract HippoxSwapHookTest is Test {
         vm.stopPrank();
         assertEq(h.beforeModifyLiquidityCount(), 1, "beforeModifyLiquidity");
         assertEq(h.afterModifyLiquidityCount(), 1, "afterModifyLiquidity");
-        IHippoxSwapHook.ModifyLiquidityContext memory before = h
+        IHippoxSwapHookV1.ModifyLiquidityContext memory before = h
             .lastBeforeModifyLiquidity();
-        IHippoxSwapHook.ModifyLiquidityContext memory after_ = h
+        IHippoxSwapHookV1.ModifyLiquidityContext memory after_ = h
             .lastAfterModifyLiquidity();
         assertTrue(before.isMint, "isMint true");
         assertTrue(after_.isMint, "isMint true after");
@@ -333,10 +337,10 @@ contract HippoxSwapHookTest is Test {
     function testModifyLiquidityHooksOnBurn() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.startPrank(alice);
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -349,9 +353,9 @@ contract HippoxSwapHookTest is Test {
         vm.stopPrank();
         assertEq(h.beforeModifyLiquidityCount(), 1, "beforeModifyLiquidity");
         assertEq(h.afterModifyLiquidityCount(), 1, "afterModifyLiquidity");
-        IHippoxSwapHook.ModifyLiquidityContext memory before = h
+        IHippoxSwapHookV1.ModifyLiquidityContext memory before = h
             .lastBeforeModifyLiquidity();
-        IHippoxSwapHook.ModifyLiquidityContext memory after_ = h
+        IHippoxSwapHookV1.ModifyLiquidityContext memory after_ = h
             .lastAfterModifyLiquidity();
         assertFalse(before.isMint, "isMint false");
         assertFalse(after_.isMint, "isMint false after");
@@ -362,7 +366,7 @@ contract HippoxSwapHookTest is Test {
     function testModifyLiquidityHooksNotCalledOnSwap() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -381,7 +385,7 @@ contract HippoxSwapHookTest is Test {
     function testGoodHookReceivesCorrectSwapArgs() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -395,8 +399,8 @@ contract HippoxSwapHookTest is Test {
         );
         assertEq(h.beforeSwapCount(), 1, "beforeSwap called once");
         assertEq(h.afterSwapCount(), 1, "afterSwap called once");
-        IHippoxSwapHook.SwapContext memory before = h.lastBeforeSwap();
-        IHippoxSwapHook.SwapContext memory after_ = h.lastAfterSwap();
+        IHippoxSwapHookV1.SwapContext memory before = h.lastBeforeSwap();
+        IHippoxSwapHookV1.SwapContext memory after_ = h.lastAfterSwap();
         assertEq(before.amount0In, 999e18, "before amount0In post-tax");
         assertEq(after_.amount0In, 999e18, "after amount0In post-tax");
         assertEq(after_.amount0Out, 0, "amount0Out is zero for A->B");
@@ -406,7 +410,7 @@ contract HippoxSwapHookTest is Test {
     function testRevertingHookDoesNotBlockMint() public {
         RevertingHook h = new RevertingHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -423,10 +427,10 @@ contract HippoxSwapHookTest is Test {
     function testRevertingHookDoesNotBlockBurn() public {
         RevertingHook h = new RevertingHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.startPrank(alice);
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -441,7 +445,7 @@ contract HippoxSwapHookTest is Test {
     function testRevertingHookDoesNotBlockSwap() public {
         RevertingHook h = new RevertingHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -462,7 +466,7 @@ contract HippoxSwapHookTest is Test {
         ReentrantHook h = new ReentrantHook();
         h.setPair(pair);
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -483,7 +487,7 @@ contract HippoxSwapHookTest is Test {
         GoodHook h1 = new GoodHook();
         GoodHook h2 = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h1));
+        HippoxSwapPairV1(pair).setHook(address(h1));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -498,7 +502,7 @@ contract HippoxSwapHookTest is Test {
         vm.stopPrank();
         assertEq(h1.beforeModifyLiquidityCount(), 1);
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h2));
+        HippoxSwapPairV1(pair).setHook(address(h2));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -517,7 +521,7 @@ contract HippoxSwapHookTest is Test {
     function testClearHookStopsCallbacks() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -532,7 +536,7 @@ contract HippoxSwapHookTest is Test {
         vm.stopPrank();
         assertEq(h.beforeModifyLiquidityCount(), 1);
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(0));
+        HippoxSwapPairV1(pair).setHook(address(0));
         vm.startPrank(alice);
         router.addLiquidity(
             address(tokenA),
@@ -555,8 +559,8 @@ contract HippoxSwapHookTest is Test {
     function testPairInfoIncludesHook() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
-        IHippoxSwapPair.PairInfo memory info = HippoxSwapPair(pair)
+        HippoxSwapPairV1(pair).setHook(address(h));
+        IHippoxSwapPairV1.PairInfo memory info = HippoxSwapPairV1(pair)
             .getPairInfo();
         assertEq(info.hook, address(h), "PairInfo.hook set");
     }
@@ -564,7 +568,7 @@ contract HippoxSwapHookTest is Test {
     function testManyOperationsWithHook() public {
         GoodHook h = new GoodHook();
         vm.prank(alice);
-        HippoxSwapPair(pair).setHook(address(h));
+        HippoxSwapPairV1(pair).setHook(address(h));
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -587,8 +591,8 @@ contract HippoxSwapHookTest is Test {
                 alice,
                 block.timestamp + 1 hours
             );
-            uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-            HippoxSwapPair(pair).approve(address(router), lpBal / 2);
+            uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+            HippoxSwapPairV1(pair).approve(address(router), lpBal / 2);
             router.removeLiquidity(
                 address(tokenA),
                 address(tokenB),

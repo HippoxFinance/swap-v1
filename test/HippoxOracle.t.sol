@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
-import {IHippoxSwapPair} from "../src/interfaces/IHippoxSwapPair.sol";
+import {IHippoxSwapPairV1} from "../src/interfaces/IHippoxSwapPairV1.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
     uint8 private _dec;
@@ -22,8 +22,8 @@ contract MockToken is ERC20 {
 /// @title HippoxOracleTest
 /// @notice Tests for the on-chain native TWAP oracle integrated into HippoxSwapPair.
 contract HippoxOracleTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -33,8 +33,8 @@ contract HippoxOracleTest is Test {
     function setUp() public {
         // Deploy core contracts.
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         // Deploy mock tokens.
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
@@ -69,13 +69,14 @@ contract HippoxOracleTest is Test {
     }
     /// @notice After the first mint, the oracle timestamp should be set.
     function testOracleTimestampInitialized() public view {
-        uint40 ts = HippoxSwapPair(pair).blockTimestampLast();
+        uint40 ts = HippoxSwapPairV1(pair).blockTimestampLast();
         assertEq(ts, uint40(block.timestamp), "timestamp set");
     }
     /// @notice Cumulative prices should remain zero until time passes and a
     ///         subsequent update happens.
     function testCumulativeZeroAtFirst() public view {
-        (uint256 p0, uint256 p1, ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0, uint256 p1, ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertEq(p0, 0, "price0 cumulative zero");
         assertEq(p1, 0, "price1 cumulative zero");
     }
@@ -93,7 +94,8 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0, uint256 p1, ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0, uint256 p1, ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertGt(p0, 0, "price0 cumulative grew");
         assertGt(p1, 0, "price1 cumulative grew");
     }
@@ -112,7 +114,8 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0, , uint40 ts) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0, , uint40 ts) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertGt(ts, 0, "timestamp updated");
         uint256 expectedApprox = (uint256(1) << 112) * 3600;
         uint256 lower = (expectedApprox * 95) / 100;
@@ -122,7 +125,7 @@ contract HippoxOracleTest is Test {
     }
     /// @notice consult() should return a TWAP-based output amount.
     function testConsultReturnsTwapAmount() public {
-        (uint256 p0Then, uint256 p1Then, uint40 tsThen) = HippoxSwapPair(pair)
+        (uint256 p0Then, uint256 p1Then, uint40 tsThen) = HippoxSwapPairV1(pair)
             .getCumulativePrices();
         vm.warp(block.timestamp + 2 hours);
         vm.prank(alice);
@@ -136,11 +139,11 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0Now, uint256 p1Now, uint40 tsNow) = HippoxSwapPair(pair)
+        (uint256 p0Now, uint256 p1Now, uint40 tsNow) = HippoxSwapPairV1(pair)
             .getCumulativePrices();
         uint40 elapsed = tsNow - tsThen;
         assertGt(elapsed, 0, "time elapsed");
-        uint256 amountOut = HippoxSwapPair(pair).consult(
+        uint256 amountOut = HippoxSwapPairV1(pair).consult(
             address(tokenA),
             1e18,
             p0Then,
@@ -148,7 +151,7 @@ contract HippoxOracleTest is Test {
             elapsed
         );
         assertGt(amountOut, 0, "consult returned output");
-        uint256 amountOutReverse = HippoxSwapPair(pair).consult(
+        uint256 amountOutReverse = HippoxSwapPairV1(pair).consult(
             address(tokenB),
             1e18,
             p1Then,
@@ -159,18 +162,18 @@ contract HippoxOracleTest is Test {
     }
     /// @notice consult() should revert if timeElapsed is zero.
     function testConsultRevertsOnZeroElapsed() public {
-        (uint256 p0Then, uint256 p0Now, ) = HippoxSwapPair(pair)
+        (uint256 p0Then, uint256 p0Now, ) = HippoxSwapPairV1(pair)
             .getCumulativePrices();
         vm.expectRevert(bytes("INSUFFICIENT_ELAPSED_TIME"));
-        HippoxSwapPair(pair).consult(address(tokenA), 1e18, p0Then, p0Now, 0);
+        HippoxSwapPairV1(pair).consult(address(tokenA), 1e18, p0Then, p0Now, 0);
     }
     /// @notice consult() should revert on an invalid token.
     function testConsultRevertsOnInvalidToken() public {
         MockToken tokenC = new MockToken("TokenC", "C", 18);
-        (uint256 p0Then, uint256 p0Now, ) = HippoxSwapPair(pair)
+        (uint256 p0Then, uint256 p0Now, ) = HippoxSwapPairV1(pair)
             .getCumulativePrices();
         vm.expectRevert(bytes("INVALID_TOKEN"));
-        HippoxSwapPair(pair).consult(address(tokenC), 1e18, p0Then, p0Now, 1);
+        HippoxSwapPairV1(pair).consult(address(tokenC), 1e18, p0Then, p0Now, 1);
     }
     /// @notice Multiple updates over time should keep accumulating.
     function testCumulativeAccumulatesAcrossMultipleUpdates() public {
@@ -186,7 +189,7 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0First, , ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0First, , ) = HippoxSwapPairV1(pair).getCumulativePrices();
         assertGt(p0First, 0, "first accumulation");
         vm.warp(block.timestamp + 1 hours);
         vm.prank(alice);
@@ -197,16 +200,16 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0Second, , ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0Second, , ) = HippoxSwapPairV1(pair).getCumulativePrices();
         assertGt(p0Second, p0First, "second accumulation grows");
     }
     /// @notice Trading tax should not distort the oracle because _update uses
     ///         post-tax balances.
     function testOracleNotDistortedByTax() public {
         vm.prank(alice);
-        HippoxSwapPair(pair).setTaxBps(100); // 1%
+        HippoxSwapPairV1(pair).setTaxBps(100); // 1%
         vm.prank(alice);
-        HippoxSwapPair(pair).setTaxRecipient(makeAddr("taxSink"));
+        HippoxSwapPairV1(pair).setTaxRecipient(makeAddr("taxSink"));
         vm.warp(block.timestamp + 1 hours);
         vm.prank(alice);
         address[] memory path = new address[](2);
@@ -219,7 +222,8 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0, uint256 p1, ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0, uint256 p1, ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertGt(p0, 0, "price0 cumulative grew despite tax");
         assertGt(p1, 0, "price1 cumulative grew despite tax");
     }
@@ -237,12 +241,13 @@ contract HippoxOracleTest is Test {
             bob,
             block.timestamp + 1 hours
         );
-        (uint256 p0AfterMint, , ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0AfterMint, , ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertGt(p0AfterMint, 0, "oracle updated on mint");
         vm.warp(block.timestamp + 1 hours);
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(bob);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(bob);
         vm.startPrank(bob);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -253,7 +258,8 @@ contract HippoxOracleTest is Test {
             block.timestamp + 1 hours
         );
         vm.stopPrank();
-        (uint256 p0AfterBurn, , ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0AfterBurn, , ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         assertGe(p0AfterBurn, p0AfterMint, "oracle did not decrease on burn");
     }
     /// @notice Same-block operations should not accumulate (timeElapsed == 0).
@@ -269,7 +275,8 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0AfterFirst, , ) = HippoxSwapPair(pair).getCumulativePrices();
+        (uint256 p0AfterFirst, , ) = HippoxSwapPairV1(pair)
+            .getCumulativePrices();
         vm.prank(alice);
         router.swapExactTokensForTokens(
             1e18,
@@ -278,7 +285,7 @@ contract HippoxOracleTest is Test {
             alice,
             block.timestamp + 1 hours
         );
-        (uint256 p0AfterSecond, , ) = HippoxSwapPair(pair)
+        (uint256 p0AfterSecond, , ) = HippoxSwapPairV1(pair)
             .getCumulativePrices();
         assertEq(p0AfterSecond, p0AfterFirst, "no accumulation in same block");
     }

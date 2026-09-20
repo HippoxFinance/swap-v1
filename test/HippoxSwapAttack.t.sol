@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
@@ -20,7 +20,7 @@ contract MockToken is ERC20 {
 }
 /// @dev Malicious ERC20 that reenters the pair on transfer.
 contract ReentrantToken is ERC20 {
-    HippoxSwapPair public pair;
+    HippoxSwapPairV1 public pair;
     bool public attacked;
     uint256 public attackCount;
     bool public shouldAttack;
@@ -29,7 +29,7 @@ contract ReentrantToken is ERC20 {
         _mint(to, amount);
     }
     function setPair(address _pair) external {
-        pair = HippoxSwapPair(_pair);
+        pair = HippoxSwapPairV1(_pair);
     }
     function enableAttack(bool _v) external {
         shouldAttack = _v;
@@ -50,10 +50,10 @@ contract ReentrantToken is ERC20 {
 }
 /// @dev Malicious contract that reenters swap via receive().
 contract ReentrantReceiver {
-    HippoxSwapPair public pair;
+    HippoxSwapPairV1 public pair;
     bool public attacked;
     function setPair(address _pair) external {
-        pair = HippoxSwapPair(_pair);
+        pair = HippoxSwapPairV1(_pair);
     }
     receive() external payable {
         if (!attacked) {
@@ -65,8 +65,8 @@ contract ReentrantReceiver {
 /// @title HippoxSwapAttackTest
 /// @notice Adversarial tests: reentrancy, sandwich, extreme reserves, decimals, self-referential addresses.
 contract HippoxSwapAttackTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA; // 18 decimals
     MockToken tokenB; // 18 decimals
@@ -78,8 +78,8 @@ contract HippoxSwapAttackTest is Test {
     address pair;
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         usdc = new MockToken("USDC", "USDC", 6);
@@ -136,8 +136,8 @@ contract HippoxSwapAttackTest is Test {
         address rPair = factory.getPair(address(rToken), address(tokenB));
         rToken.setPair(rPair);
         vm.startPrank(creator);
-        HippoxSwapPair(rPair).setTaxBps(100);
-        HippoxSwapPair(rPair).setTaxRecipient(address(rToken));
+        HippoxSwapPairV1(rPair).setTaxBps(100);
+        HippoxSwapPairV1(rPair).setTaxRecipient(address(rToken));
         vm.stopPrank();
         // Enable reentrancy.
         rToken.enableAttack(true);
@@ -157,7 +157,7 @@ contract HippoxSwapAttackTest is Test {
             )
         {
             // If it succeeds, verify pair still has reserves and invariant holds.
-            (uint112 r0, uint112 r1) = HippoxSwapPair(rPair).getReserves();
+            (uint112 r0, uint112 r1) = HippoxSwapPairV1(rPair).getReserves();
             assertGt(r0, 0, "reserve0 intact");
             assertGt(r1, 0, "reserve1 intact");
         } catch {
@@ -169,8 +169,8 @@ contract HippoxSwapAttackTest is Test {
         ReentrantReceiver recv = new ReentrantReceiver();
         recv.setPair(pair);
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setTaxBps(100);
-        HippoxSwapPair(pair).setTaxRecipient(address(recv));
+        HippoxSwapPairV1(pair).setTaxBps(100);
+        HippoxSwapPairV1(pair).setTaxRecipient(address(recv));
         vm.stopPrank();
         // Give recv some tokenA so it can be a valid recipient.
         tokenA.mint(address(recv), 0);
@@ -186,7 +186,7 @@ contract HippoxSwapAttackTest is Test {
             block.timestamp + 1 hours
         );
         // Pair remains healthy.
-        (uint112 r0, uint112 r1) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(pair).getReserves();
         assertGt(r0, 0);
         assertGt(r1, 0);
     }
@@ -262,7 +262,7 @@ contract HippoxSwapAttackTest is Test {
     }
     // 5. Price manipulation: large swap moves price significantly
     function testLargeSwapMovesPrice() public {
-        (, uint112 r1Before) = HippoxSwapPair(pair).getReserves();
+        (, uint112 r1Before) = HippoxSwapPairV1(pair).getReserves();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -274,7 +274,7 @@ contract HippoxSwapAttackTest is Test {
             attacker,
             block.timestamp + 1 hours
         );
-        (, uint112 r1After) = HippoxSwapPair(pair).getReserves();
+        (, uint112 r1After) = HippoxSwapPairV1(pair).getReserves();
         assertLt(r1After, r1Before, "reserve1 dropped");
         // Price moved: reserve ratio changed significantly.
     }
@@ -284,7 +284,7 @@ contract HippoxSwapAttackTest is Test {
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
-        (uint112 r0, uint112 r1) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(pair).getReserves();
         // Swap almost all tokenA in to drain tokenB.
         uint256 hugeIn = uint256(r0) * 100;
         tokenA.mint(attacker, hugeIn);
@@ -298,7 +298,8 @@ contract HippoxSwapAttackTest is Test {
             attacker,
             block.timestamp + 1 hours
         );
-        (uint112 r0After, uint112 r1After) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0After, uint112 r1After) = HippoxSwapPairV1(pair)
+            .getReserves();
         // tokenB reserve is now very small but non-zero.
         assertGt(r1After, 0, "tokenB still non-zero");
         assertGt(r0After, r0, "tokenA reserve grew");
@@ -337,8 +338,8 @@ contract HippoxSwapAttackTest is Test {
     // 8. taxRecipient == pair itself
     function testTaxRecipientIsPairItself() public {
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setTaxBps(100);
-        HippoxSwapPair(pair).setTaxRecipient(pair);
+        HippoxSwapPairV1(pair).setTaxBps(100);
+        HippoxSwapPairV1(pair).setTaxRecipient(pair);
         vm.stopPrank();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
@@ -354,15 +355,15 @@ contract HippoxSwapAttackTest is Test {
         );
         uint256 received = tokenB.balanceOf(creator) - before;
         assertGt(received, 0, "swap works even when taxRecipient is pair");
-        (uint112 r0, uint112 r1) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(pair).getReserves();
         assertGt(r0, 0);
         assertGt(r1, 0);
     }
     // 9. taxRecipient == factory
     function testTaxRecipientIsFactory() public {
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setTaxBps(100);
-        HippoxSwapPair(pair).setTaxRecipient(address(factory));
+        HippoxSwapPairV1(pair).setTaxBps(100);
+        HippoxSwapPairV1(pair).setTaxRecipient(address(factory));
         vm.stopPrank();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
@@ -381,8 +382,8 @@ contract HippoxSwapAttackTest is Test {
     // 10. taxRecipient == router
     function testTaxRecipientIsRouter() public {
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setTaxBps(100);
-        HippoxSwapPair(pair).setTaxRecipient(address(router));
+        HippoxSwapPairV1(pair).setTaxBps(100);
+        HippoxSwapPairV1(pair).setTaxRecipient(address(router));
         vm.stopPrank();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
@@ -401,12 +402,12 @@ contract HippoxSwapAttackTest is Test {
     // 11. admin == pair itself
     function testAdminIsPairItself() public {
         vm.prank(creator);
-        HippoxSwapPair(pair).setAdmin(pair);
-        assertEq(HippoxSwapPair(pair).admin(), pair, "admin is pair");
+        HippoxSwapPairV1(pair).setAdmin(pair);
+        assertEq(HippoxSwapPairV1(pair).admin(), pair, "admin is pair");
         // No one can call setFeeNumerator now, because the pair cannot initiate txs.
         vm.prank(creator);
         vm.expectRevert("ONLY_ADMIN");
-        HippoxSwapPair(pair).setFeeNumerator(5);
+        HippoxSwapPairV1(pair).setFeeNumerator(5);
     }
     // 12. Same token in multiple pairs
     function testSameTokenInMultiplePairs() public {
@@ -428,7 +429,7 @@ contract HippoxSwapAttackTest is Test {
         address pairAC = factory.getPair(address(tokenA), address(tokenC));
         assertTrue(pairAC != address(0), "pairAC exists");
         // Swap on pairAB does not affect pairAC reserves.
-        (uint112 acR0Before, uint112 acR1Before) = HippoxSwapPair(pairAC)
+        (uint112 acR0Before, uint112 acR1Before) = HippoxSwapPairV1(pairAC)
             .getReserves();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
@@ -441,7 +442,7 @@ contract HippoxSwapAttackTest is Test {
             creator,
             block.timestamp + 1 hours
         );
-        (uint112 acR0After, uint112 acR1After) = HippoxSwapPair(pairAC)
+        (uint112 acR0After, uint112 acR1After) = HippoxSwapPairV1(pairAC)
             .getReserves();
         assertEq(acR0Before, acR0After, "pairAC reserve0 unchanged");
         assertEq(acR1Before, acR1After, "pairAC reserve1 unchanged");
@@ -449,7 +450,7 @@ contract HippoxSwapAttackTest is Test {
     // 13. Repeated fee change + swap in same block
     function testFeeChangeAndSwapSameBlock() public {
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setFeeNumerator(10);
+        HippoxSwapPairV1(pair).setFeeNumerator(10);
         vm.stopPrank();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
@@ -463,20 +464,20 @@ contract HippoxSwapAttackTest is Test {
             block.timestamp + 1 hours
         );
         // Fee remains at 10 after swap.
-        assertEq(HippoxSwapPair(pair).feeNumerator(), 10);
+        assertEq(HippoxSwapPairV1(pair).feeNumerator(), 10);
     }
     // 14. Zero-output swap must revert
     function testZeroOutputSwapReverts() public {
         // Directly call pair.swap with both outputs = 0.
         vm.prank(attacker);
         vm.expectRevert("INSUFFICIENT_OUTPUT_AMOUNT");
-        HippoxSwapPair(pair).swap(0, 0, attacker);
+        HippoxSwapPairV1(pair).swap(0, 0, attacker);
     }
     // 15. Attacker cannot drain via repeated tiny swaps with max tax
     function testRepeatedTinySwapsNoDrain() public {
         vm.startPrank(creator);
-        HippoxSwapPair(pair).setTaxBps(100);
-        HippoxSwapPair(pair).setTaxRecipient(taxSink);
+        HippoxSwapPairV1(pair).setTaxBps(100);
+        HippoxSwapPairV1(pair).setTaxRecipient(taxSink);
         vm.stopPrank();
         tokenA.mint(attacker, 1000e18);
         vm.prank(attacker);
@@ -484,7 +485,7 @@ contract HippoxSwapAttackTest is Test {
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
-        (uint112 r0Before, uint112 r1Before) = HippoxSwapPair(pair)
+        (uint112 r0Before, uint112 r1Before) = HippoxSwapPairV1(pair)
             .getReserves();
         for (uint256 i = 0; i < 50; i++) {
             vm.prank(attacker);
@@ -496,7 +497,8 @@ contract HippoxSwapAttackTest is Test {
                 block.timestamp + 1 hours
             );
         }
-        (uint112 r0After, uint112 r1After) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0After, uint112 r1After) = HippoxSwapPairV1(pair)
+            .getReserves();
         // Reserves grew (attacker paid in), pair is not drained.
         assertGt(r0After, r0Before, "reserve0 grew");
         assertLt(r1After, r1Before, "reserve1 shrank but not drained");
@@ -506,7 +508,7 @@ contract HippoxSwapAttackTest is Test {
     function testDonationThenSwapSyncs() public {
         vm.prank(creator);
         tokenA.transfer(pair, 10_000e18);
-        (uint112 r0Before, ) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0Before, ) = HippoxSwapPairV1(pair).getReserves();
         address[] memory path = new address[](2);
         path[0] = address(tokenA);
         path[1] = address(tokenB);
@@ -518,7 +520,7 @@ contract HippoxSwapAttackTest is Test {
             creator,
             block.timestamp + 1 hours
         );
-        (uint112 r0After, ) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0After, ) = HippoxSwapPairV1(pair).getReserves();
         assertGt(r0After, r0Before, "reserve0 grew after donation + swap");
     }
 }

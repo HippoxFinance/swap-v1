@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
-import {HippoxOracle} from "../src/HippoxOracle.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
+import {HippoxOracleV1} from "../src/HippoxOracleV1.sol";
 import {WETH} from "../src/WETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
@@ -20,9 +20,9 @@ contract MockToken is ERC20 {
     }
 }
 contract HippoxOracleReaderTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
-    HippoxOracle oracle;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
+    HippoxOracleV1 oracle;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -30,8 +30,8 @@ contract HippoxOracleReaderTest is Test {
     address pair;
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenA.mint(alice, 10_000_000e18);
@@ -51,7 +51,7 @@ contract HippoxOracleReaderTest is Test {
         );
         vm.stopPrank();
         pair = factory.getPair(address(tokenA), address(tokenB));
-        oracle = new HippoxOracle(pair);
+        oracle = new HippoxOracleV1(pair);
     }
     function testOraclePairSet() public view {
         assertEq(oracle.pair(), pair, "pair set");

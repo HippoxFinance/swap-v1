@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -73,8 +73,8 @@ contract BadFlashReceiver is IHippoxFlashSwapCallback {
     }
 }
 contract HippoxFlashSwapTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -82,8 +82,8 @@ contract HippoxFlashSwapTest is Test {
     address pair;
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenA.mint(alice, 10_000_000e18);
@@ -113,9 +113,9 @@ contract HippoxFlashSwapTest is Test {
         tokenA.mint(address(receiver), 10_000e18);
         tokenB.mint(address(receiver), 10_000e18);
         vm.prank(alice);
-        HippoxSwapPair(pair).flashSwap(100e18, 0, address(receiver), "");
+        HippoxSwapPairV1(pair).flashSwap(100e18, 0, address(receiver), "");
         assertGt(receiver.lastAmount0In(), 0, "amount0In recorded");
-        (uint112 r0, uint112 r1) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(pair).getReserves();
         assertGt(r0, 0, "reserve0 positive");
         assertGt(r1, 0, "reserve1 positive");
     }
@@ -123,7 +123,7 @@ contract HippoxFlashSwapTest is Test {
         BadFlashReceiver receiver = new BadFlashReceiver();
         vm.prank(alice);
         vm.expectRevert(bytes("INSUFFICIENT_INPUT_AMOUNT"));
-        HippoxSwapPair(pair).flashSwap(100e18, 0, address(receiver), "");
+        HippoxSwapPairV1(pair).flashSwap(100e18, 0, address(receiver), "");
     }
     function testFlashSwapZeroOutputReverts() public {
         GoodFlashReceiver receiver = new GoodFlashReceiver(
@@ -133,7 +133,7 @@ contract HippoxFlashSwapTest is Test {
         );
         vm.prank(alice);
         vm.expectRevert(bytes("INSUFFICIENT_OUTPUT_AMOUNT"));
-        HippoxSwapPair(pair).flashSwap(0, 0, address(receiver), "");
+        HippoxSwapPairV1(pair).flashSwap(0, 0, address(receiver), "");
     }
     function testFlashSwapTooMuchOutputReverts() public {
         GoodFlashReceiver receiver = new GoodFlashReceiver(
@@ -141,10 +141,10 @@ contract HippoxFlashSwapTest is Test {
             address(tokenA),
             address(tokenB)
         );
-        (uint112 r0, ) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, ) = HippoxSwapPairV1(pair).getReserves();
         vm.prank(alice);
         vm.expectRevert(bytes("INSUFFICIENT_LIQUIDITY"));
-        HippoxSwapPair(pair).flashSwap(uint256(r0), 0, address(receiver), "");
+        HippoxSwapPairV1(pair).flashSwap(uint256(r0), 0, address(receiver), "");
     }
     function testRouterFlashSwapForwardsCallback() public {
         vm.prank(alice);

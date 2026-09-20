@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
-import {IHippoxSwapHook} from "../src/interfaces/IHippoxSwapHook.sol";
+import {IHippoxSwapHookV1} from "../src/interfaces/IHippoxSwapHookV1.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
     uint8 private _dec;
@@ -20,7 +20,7 @@ contract MockToken is ERC20 {
     }
 }
 /// @dev Hook that records initialize callbacks.
-contract InitHook is IHippoxSwapHook {
+contract InitHook is IHippoxSwapHookV1 {
     uint256 public beforeInitializeCount;
     uint256 public afterInitializeCount;
     function beforeInitialize(InitializeContext calldata) external override {
@@ -48,16 +48,16 @@ contract InitHook is IHippoxSwapHook {
 /// @notice Tests that the Router can create a pair with a hook via
 ///         addLiquidityWithHook, and that initialize hooks actually fire.
 contract HippoxRouterHookTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
     address alice = makeAddr("alice");
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenA.mint(alice, 10_000_000e18);
@@ -83,7 +83,7 @@ contract HippoxRouterHookTest is Test {
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
         assertTrue(pair != address(0), "pair created");
-        assertEq(HippoxSwapPair(pair).hook(), address(hook), "hook installed");
+        assertEq(HippoxSwapPairV1(pair).hook(), address(hook), "hook installed");
     }
     function testInitializeHooksFireOnRouterCreatedPair() public {
         InitHook hook = new InitHook();
@@ -116,7 +116,7 @@ contract HippoxRouterHookTest is Test {
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
         assertTrue(pair != address(0), "pair created");
-        assertEq(HippoxSwapPair(pair).hook(), address(0), "no hook installed");
+        assertEq(HippoxSwapPairV1(pair).hook(), address(0), "no hook installed");
     }
     function testAddLiquidityWithHookOnExistingPairIgnoresHook() public {
         // First create pair without hook.
@@ -147,7 +147,7 @@ contract HippoxRouterHookTest is Test {
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
         assertEq(
-            HippoxSwapPair(pair).hook(),
+            HippoxSwapPairV1(pair).hook(),
             address(0),
             "hook ignored for existing pair"
         );
@@ -167,6 +167,6 @@ contract HippoxRouterHookTest is Test {
         );
         address pair = factory.getPair(address(tokenA), address(weth));
         assertTrue(pair != address(0), "pair created");
-        assertEq(HippoxSwapPair(pair).hook(), address(hook), "hook installed");
+        assertEq(HippoxSwapPairV1(pair).hook(), address(hook), "hook installed");
     }
 }

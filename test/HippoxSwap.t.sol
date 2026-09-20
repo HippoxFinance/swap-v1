@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
@@ -21,8 +21,8 @@ contract MockToken is ERC20 {
 /// @title HippoxSwapTest
 /// @notice End-to-end tests for every trading path: liquidity, swaps, ETH flows, multi-hop, extremes.
 contract HippoxSwapTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -33,8 +33,8 @@ contract HippoxSwapTest is Test {
     address carol = makeAddr("carol");
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenC = new MockToken("TokenC", "C", 18);
@@ -176,9 +176,9 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
         // Remove half.
-        HippoxSwapPair(pair).approve(address(router), lpBal / 2);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal / 2);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -190,7 +190,7 @@ contract HippoxSwapTest is Test {
         );
         vm.stopPrank();
         assertEq(
-            HippoxSwapPair(pair).balanceOf(alice),
+            HippoxSwapPairV1(pair).balanceOf(alice),
             lpBal - lpBal / 2,
             "half LP remains"
         );
@@ -208,8 +208,8 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -220,7 +220,7 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         vm.stopPrank();
-        assertEq(HippoxSwapPair(pair).balanceOf(alice), 0, "no LP left");
+        assertEq(HippoxSwapPairV1(pair).balanceOf(alice), 0, "no LP left");
     }
     function testRemoveLiquiditySlippageProtection() public {
         vm.startPrank(alice);
@@ -235,8 +235,8 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         // Demand more than possible -> revert.
         vm.expectRevert("INSUFFICIENT_AMOUNT");
         router.removeLiquidity(
@@ -482,7 +482,7 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(weth));
-        HippoxSwapPair(pair).approve(address(router), liquidity);
+        HippoxSwapPairV1(pair).approve(address(router), liquidity);
         uint256 beforeETH = alice.balance;
         router.removeLiquidityETH(
             address(tokenA),
@@ -593,7 +593,7 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         vm.stopPrank();
-        (uint112 r0, uint112 r1) = HippoxSwapPair(
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(
             factory.getPair(address(tokenA), address(tokenB))
         ).getReserves();
         assertGt(r0, 0, "large reserve0");
@@ -656,8 +656,8 @@ contract HippoxSwapTest is Test {
                 block.timestamp + 1 hours
             );
             address pair = factory.getPair(address(tokenA), address(tokenB));
-            uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-            HippoxSwapPair(pair).approve(address(router), lpBal);
+            uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+            HippoxSwapPairV1(pair).approve(address(router), lpBal);
             router.removeLiquidity(
                 address(tokenA),
                 address(tokenB),
@@ -695,7 +695,7 @@ contract HippoxSwapTest is Test {
             );
         }
         vm.stopPrank();
-        (uint112 r0, uint112 r1) = HippoxSwapPair(
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(
             factory.getPair(address(tokenA), address(tokenB))
         ).getReserves();
         assertGt(r0, 0);
@@ -747,8 +747,8 @@ contract HippoxSwapTest is Test {
         // Both LPs should get back more than they put in.
         address pair = factory.getPair(address(tokenA), address(tokenB));
         vm.startPrank(alice);
-        uint256 aliceLP = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), aliceLP);
+        uint256 aliceLP = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), aliceLP);
         uint256 aliceBeforeA = tokenA.balanceOf(alice);
         router.removeLiquidity(
             address(tokenA),
@@ -908,8 +908,8 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -920,17 +920,17 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         // After removal, the pair still holds MINIMUM_LIQUIDITY worth of reserves.
-        (uint112 r0, uint112 r1) = HippoxSwapPair(pair).getReserves();
+        (uint112 r0, uint112 r1) = HippoxSwapPairV1(pair).getReserves();
         // Directly request an output equal to the reserve -> must revert.
         tokenA.mint(alice, 1e18);
         vm.expectRevert("INSUFFICIENT_LIQUIDITY");
-        HippoxSwapPair(pair).swap(0, r1, alice);
+        HippoxSwapPairV1(pair).swap(0, r1, alice);
         // Also request an output larger than the reserve -> must revert.
         vm.expectRevert("INSUFFICIENT_LIQUIDITY");
-        HippoxSwapPair(pair).swap(0, uint256(r1) + 1, alice);
+        HippoxSwapPairV1(pair).swap(0, uint256(r1) + 1, alice);
         // And swap with both outputs zero -> must revert.
         vm.expectRevert("INSUFFICIENT_OUTPUT_AMOUNT");
-        HippoxSwapPair(pair).swap(0, 0, alice);
+        HippoxSwapPairV1(pair).swap(0, 0, alice);
         vm.stopPrank();
         // Sanity: reserves are tiny but non-zero.
         assertGt(r0, 0, "tiny reserve0 remains");
@@ -977,7 +977,7 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        assertEq(HippoxSwapPair(pair).balanceOf(carol), lp, "carol holds LP");
+        assertEq(HippoxSwapPairV1(pair).balanceOf(carol), lp, "carol holds LP");
     }
     // EXTREME: createPair is implicit via addLiquidity, then reuse
     function testPairReusedAcrossCalls() public {
@@ -1047,8 +1047,8 @@ contract HippoxSwapTest is Test {
         );
         // Remove half.
         address pair = factory.getPair(address(tokenA), address(tokenB));
-        uint256 lpBal = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), lpBal / 2);
+        uint256 lpBal = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), lpBal / 2);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -1067,8 +1067,8 @@ contract HippoxSwapTest is Test {
             block.timestamp + 1 hours
         );
         // Remove all.
-        uint256 remaining = HippoxSwapPair(pair).balanceOf(alice);
-        HippoxSwapPair(pair).approve(address(router), remaining);
+        uint256 remaining = HippoxSwapPairV1(pair).balanceOf(alice);
+        HippoxSwapPairV1(pair).approve(address(router), remaining);
         router.removeLiquidity(
             address(tokenA),
             address(tokenB),
@@ -1115,7 +1115,7 @@ contract HippoxSwapTest is Test {
         );
         // Remove liquidity.
         address pair = factory.getPair(address(tokenA), address(weth));
-        HippoxSwapPair(pair).approve(address(router), lp);
+        HippoxSwapPairV1(pair).approve(address(router), lp);
         router.removeLiquidityETH(
             address(tokenA),
             lp,

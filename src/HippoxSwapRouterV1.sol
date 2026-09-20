@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IHippoxSwapFactory} from "./interfaces/IHippoxSwapFactory.sol";
-import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
+import {IHippoxSwapFactoryV1} from "./interfaces/IHippoxSwapFactoryV1.sol";
+import {IHippoxSwapPairV1} from "./interfaces/IHippoxSwapPairV1.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
-import {HippoxSwapLibrary} from "./libs/HippoxSwapLibrary.sol";
+import {HippoxSwapLibraryV1} from "./libs/HippoxSwapLibraryV1.sol";
 /// @dev Minimal callback interface implemented by the Router to receive
 ///      flash swap callbacks from HippoxSwapPair.
 interface IHippoxFlashSwapCallback {
@@ -17,10 +17,10 @@ interface IHippoxFlashSwapCallback {
         bytes calldata data
     ) external;
 }
-/// @title HippoxSwapRouter
+/// @title HippoxSwapRouterV1
 /// @notice User-facing entry point. Handles slippage protection, ETH wrapping, multi-hop swaps, and flash swaps.
-contract HippoxSwapRouter is IHippoxFlashSwapCallback {
-    using HippoxSwapLibrary for address;
+contract HippoxSwapRouterV1 is IHippoxFlashSwapCallback {
+    using HippoxSwapLibraryV1 for address;
     address public immutable factory;
     address public immutable WETH;
     modifier ensure(uint256 deadline) {
@@ -61,11 +61,11 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
             amountBMin,
             address(0)
         );
-        address pair = IHippoxSwapFactory(factory).getPair(tokenA, tokenB);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(tokenA, tokenB);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(tokenA).transferFrom(msg.sender, pair, amountA);
         IERC20(tokenB).transferFrom(msg.sender, pair, amountB);
-        liquidity = IHippoxSwapPair(pair).mint(to);
+        liquidity = IHippoxSwapPairV1(pair).mint(to);
     }
     /// @notice Adds liquidity and creates the pair with a hook if it does not exist.
     /// @dev The hook is only used when the pair is being created in this call.
@@ -94,11 +94,11 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
             amountBMin,
             hook
         );
-        address pair = IHippoxSwapFactory(factory).getPair(tokenA, tokenB);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(tokenA, tokenB);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(tokenA).transferFrom(msg.sender, pair, amountA);
         IERC20(tokenB).transferFrom(msg.sender, pair, amountB);
-        liquidity = IHippoxSwapPair(pair).mint(to);
+        liquidity = IHippoxSwapPairV1(pair).mint(to);
     }
     function removeLiquidity(
         address tokenA,
@@ -109,11 +109,11 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         address to,
         uint256 deadline
     ) external ensure(deadline) returns (uint256 amountA, uint256 amountB) {
-        address pair = IHippoxSwapFactory(factory).getPair(tokenA, tokenB);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(tokenA, tokenB);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(pair).transferFrom(msg.sender, pair, liquidity);
-        (uint256 amount0, uint256 amount1) = IHippoxSwapPair(pair).burn(to);
-        (address token0, ) = HippoxSwapLibrary.sortTokens(tokenA, tokenB);
+        (uint256 amount0, uint256 amount1) = IHippoxSwapPairV1(pair).burn(to);
+        (address token0, ) = HippoxSwapLibraryV1.sortTokens(tokenA, tokenB);
         (amountA, amountB) = tokenA == token0
             ? (amount0, amount1)
             : (amount1, amount0);
@@ -146,12 +146,12 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
             amountETHMin,
             address(0)
         );
-        address pair = IHippoxSwapFactory(factory).getPair(token, WETH);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(token, WETH);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(token).transferFrom(msg.sender, pair, amountToken);
         IWETH(WETH).deposit{value: amountETH}();
         IERC20(WETH).transfer(pair, amountETH);
-        liquidity = IHippoxSwapPair(pair).mint(to);
+        liquidity = IHippoxSwapPairV1(pair).mint(to);
         // Refund leftover ETH.
         if (msg.value > amountETH) {
             (bool ok, ) = msg.sender.call{value: msg.value - amountETH}("");
@@ -182,12 +182,12 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
             amountETHMin,
             hook
         );
-        address pair = IHippoxSwapFactory(factory).getPair(token, WETH);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(token, WETH);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(token).transferFrom(msg.sender, pair, amountToken);
         IWETH(WETH).deposit{value: amountETH}();
         IERC20(WETH).transfer(pair, amountETH);
-        liquidity = IHippoxSwapPair(pair).mint(to);
+        liquidity = IHippoxSwapPairV1(pair).mint(to);
         if (msg.value > amountETH) {
             (bool ok, ) = msg.sender.call{value: msg.value - amountETH}("");
             require(ok, "ETH_REFUND_FAILED");
@@ -205,13 +205,13 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         ensure(deadline)
         returns (uint256 amountToken, uint256 amountETH)
     {
-        address pair = IHippoxSwapFactory(factory).getPair(token, WETH);
+        address pair = IHippoxSwapFactoryV1(factory).getPair(token, WETH);
         require(pair != address(0), "PAIR_NOT_FOUND");
         IERC20(pair).transferFrom(msg.sender, pair, liquidity);
-        (uint256 amount0, uint256 amount1) = IHippoxSwapPair(pair).burn(
+        (uint256 amount0, uint256 amount1) = IHippoxSwapPairV1(pair).burn(
             address(this)
         );
-        (address token0, ) = HippoxSwapLibrary.sortTokens(token, WETH);
+        (address token0, ) = HippoxSwapLibraryV1.sortTokens(token, WETH);
         (amountToken, amountETH) = token == token0
             ? (amount0, amount1)
             : (amount1, amount0);
@@ -232,14 +232,14 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         address to,
         uint256 deadline
     ) external ensure(deadline) returns (uint256[] memory amounts) {
-        amounts = HippoxSwapLibrary.getAmountsOut(factory, amountIn, path);
+        amounts = HippoxSwapLibraryV1.getAmountsOut(factory, amountIn, path);
         require(
             amounts[amounts.length - 1] >= amountOutMin,
             "INSUFFICIENT_OUTPUT_AMOUNT"
         );
         IERC20(path[0]).transferFrom(
             msg.sender,
-            IHippoxSwapFactory(factory).getPair(path[0], path[1]),
+            IHippoxSwapFactoryV1(factory).getPair(path[0], path[1]),
             amounts[0]
         );
         _swap(amounts, path, to);
@@ -251,11 +251,11 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         address to,
         uint256 deadline
     ) external ensure(deadline) returns (uint256[] memory amounts) {
-        amounts = HippoxSwapLibrary.getAmountsIn(factory, amountOut, path);
+        amounts = HippoxSwapLibraryV1.getAmountsIn(factory, amountOut, path);
         require(amounts[0] <= amountInMax, "EXCESSIVE_INPUT_AMOUNT");
         IERC20(path[0]).transferFrom(
             msg.sender,
-            IHippoxSwapFactory(factory).getPair(path[0], path[1]),
+            IHippoxSwapFactoryV1(factory).getPair(path[0], path[1]),
             amounts[0]
         );
         _swap(amounts, path, to);
@@ -268,14 +268,14 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         uint256 deadline
     ) external payable ensure(deadline) returns (uint256[] memory amounts) {
         require(path[0] == WETH, "INVALID_PATH");
-        amounts = HippoxSwapLibrary.getAmountsOut(factory, msg.value, path);
+        amounts = HippoxSwapLibraryV1.getAmountsOut(factory, msg.value, path);
         require(
             amounts[amounts.length - 1] >= amountOutMin,
             "INSUFFICIENT_OUTPUT_AMOUNT"
         );
         IWETH(WETH).deposit{value: amounts[0]}();
         IERC20(WETH).transfer(
-            IHippoxSwapFactory(factory).getPair(path[0], path[1]),
+            IHippoxSwapFactoryV1(factory).getPair(path[0], path[1]),
             amounts[0]
         );
         _swap(amounts, path, to);
@@ -288,14 +288,14 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         uint256 deadline
     ) external ensure(deadline) returns (uint256[] memory amounts) {
         require(path[path.length - 1] == WETH, "INVALID_PATH");
-        amounts = HippoxSwapLibrary.getAmountsOut(factory, amountIn, path);
+        amounts = HippoxSwapLibraryV1.getAmountsOut(factory, amountIn, path);
         require(
             amounts[amounts.length - 1] >= amountOutMin,
             "INSUFFICIENT_OUTPUT_AMOUNT"
         );
         IERC20(path[0]).transferFrom(
             msg.sender,
-            IHippoxSwapFactory(factory).getPair(path[0], path[1]),
+            IHippoxSwapFactoryV1(factory).getPair(path[0], path[1]),
             amounts[0]
         );
         _swap(amounts, path, address(this));
@@ -314,7 +314,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         bytes calldata data
     ) external {
         require(pair != address(0), "ZERO_PAIR");
-        IHippoxSwapPair(pair).flashSwap(
+        IHippoxSwapPairV1(pair).flashSwap(
             amount0Out,
             amount1Out,
             msg.sender,
@@ -347,7 +347,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         uint256 amountIn,
         address[] calldata path
     ) external view returns (uint256[] memory amounts) {
-        return HippoxSwapLibrary.getAmountsOut(factory, amountIn, path);
+        return HippoxSwapLibraryV1.getAmountsOut(factory, amountIn, path);
     }
     /// @notice Batch multi-hop quotes.
     function quoteBatch(
@@ -357,7 +357,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         require(amountsIn.length == paths.length, "LENGTH_MISMATCH");
         results = new uint256[][](amountsIn.length);
         for (uint256 i = 0; i < amountsIn.length; i++) {
-            results[i] = HippoxSwapLibrary.getAmountsOut(
+            results[i] = HippoxSwapLibraryV1.getAmountsOut(
                 factory,
                 amountsIn[i],
                 paths[i]
@@ -380,15 +380,17 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         uint256 amountBMin,
         address hook
     ) internal returns (uint256 amountA, uint256 amountB) {
-        if (IHippoxSwapFactory(factory).getPair(tokenA, tokenB) == address(0)) {
+        if (
+            IHippoxSwapFactoryV1(factory).getPair(tokenA, tokenB) == address(0)
+        ) {
             if (hook == address(0)) {
-                IHippoxSwapFactory(factory).createPair(
+                IHippoxSwapFactoryV1(factory).createPair(
                     tokenA,
                     tokenB,
                     msg.sender
                 );
             } else {
-                IHippoxSwapFactory(factory).createPairWithHook(
+                IHippoxSwapFactoryV1(factory).createPairWithHook(
                     tokenA,
                     tokenB,
                     msg.sender,
@@ -396,7 +398,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
                 );
             }
         }
-        (uint256 reserveA, uint256 reserveB) = HippoxSwapLibrary.getReserves(
+        (uint256 reserveA, uint256 reserveB) = HippoxSwapLibraryV1.getReserves(
             factory,
             tokenA,
             tokenB
@@ -404,7 +406,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
         if (reserveA == 0 && reserveB == 0) {
             (amountA, amountB) = (amountADesired, amountBDesired);
         } else {
-            uint256 amountBOptimal = HippoxSwapLibrary.quote(
+            uint256 amountBOptimal = HippoxSwapLibraryV1.quote(
                 amountADesired,
                 reserveA,
                 reserveB
@@ -413,7 +415,7 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
                 require(amountBOptimal >= amountBMin, "INSUFFICIENT_B_AMOUNT");
                 (amountA, amountB) = (amountADesired, amountBOptimal);
             } else {
-                uint256 amountAOptimal = HippoxSwapLibrary.quote(
+                uint256 amountAOptimal = HippoxSwapLibraryV1.quote(
                     amountBDesired,
                     reserveB,
                     reserveA
@@ -434,16 +436,17 @@ contract HippoxSwapRouter is IHippoxFlashSwapCallback {
     ) internal {
         for (uint256 i; i < path.length - 1; i++) {
             (address input, address output) = (path[i], path[i + 1]);
-            (address token0, ) = HippoxSwapLibrary.sortTokens(input, output);
+            (address token0, ) = HippoxSwapLibraryV1.sortTokens(input, output);
             uint256 amountOut = amounts[i + 1];
             (uint256 amount0Out, uint256 amount1Out) = input == token0
                 ? (uint256(0), amountOut)
                 : (amountOut, uint256(0));
             address nextPair = i < path.length - 2
-                ? IHippoxSwapFactory(factory).getPair(output, path[i + 2])
+                ? IHippoxSwapFactoryV1(factory).getPair(output, path[i + 2])
                 : to;
-            IHippoxSwapPair(IHippoxSwapFactory(factory).getPair(input, output))
-                .swap(amount0Out, amount1Out, nextPair);
+            IHippoxSwapPairV1(
+                IHippoxSwapFactoryV1(factory).getPair(input, output)
+            ).swap(amount0Out, amount1Out, nextPair);
         }
     }
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-/// @title IHippoxSwapFactory
+/// @title IHippoxSwapFactoryV1
 /// @notice Interface for the HippoxSwap factory contract.
-interface IHippoxSwapFactory {
+interface IHippoxSwapFactoryV1 {
     event PairCreated(
         address indexed token0,
         address indexed token1,

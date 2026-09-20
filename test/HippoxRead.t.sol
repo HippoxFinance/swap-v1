@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
-import {HippoxSwapPair} from "../src/HippoxSwapPair.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
+import {HippoxSwapPairV1} from "../src/HippoxSwapPairV1.sol";
 import {WETH} from "../src/WETH.sol";
-import {IHippoxSwapPair} from "../src/interfaces/IHippoxSwapPair.sol";
+import {IHippoxSwapPairV1} from "../src/interfaces/IHippoxSwapPairV1.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract MockToken is ERC20 {
     uint8 private _dec;
@@ -22,8 +22,8 @@ contract MockToken is ERC20 {
 /// @title HippoxReadTest
 /// @notice Prints and validates the extended read functions.
 contract HippoxReadTest is Test {
-    HippoxSwapFactory factory;
-    HippoxSwapRouter router;
+    HippoxSwapFactoryV1 factory;
+    HippoxSwapRouterV1 router;
     WETH weth;
     MockToken tokenA;
     MockToken tokenB;
@@ -33,8 +33,8 @@ contract HippoxReadTest is Test {
     address pairBC;
     function setUp() public {
         weth = new WETH();
-        factory = new HippoxSwapFactory(address(this));
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(address(this));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         tokenA = new MockToken("TokenA", "A", 18);
         tokenB = new MockToken("TokenB", "B", 18);
         tokenC = new MockToken("TokenC", "C", 18);
@@ -71,7 +71,7 @@ contract HippoxReadTest is Test {
     }
     // getPairInfo
     function testPrintPairInfo() public view {
-        IHippoxSwapPair.PairInfo memory info = HippoxSwapPair(pairAB)
+        IHippoxSwapPairV1.PairInfo memory info = HippoxSwapPairV1(pairAB)
             .getPairInfo();
         console.log("=== PairInfo for pairAB ===");
         console.log("token0:", info.token0);
@@ -99,7 +99,7 @@ contract HippoxReadTest is Test {
     // Pair.getAmountOut (tax-inclusive)
     function testPrintPairGetAmountOut() public view {
         uint256 amountIn = 1000e18;
-        uint256 out = HippoxSwapPair(pairAB).getAmountOut(
+        uint256 out = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );
@@ -111,7 +111,7 @@ contract HippoxReadTest is Test {
     }
     function testPairQuoteMatchesSwap() public {
         uint256 amountIn = 1000e18;
-        uint256 quoted = HippoxSwapPair(pairAB).getAmountOut(
+        uint256 quoted = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );
@@ -221,9 +221,9 @@ contract HippoxReadTest is Test {
         console.log("info length (bytes):", infoBytes.length);
         assertEq(pair, pairAB);
         assertGt(infoBytes.length, 0);
-        IHippoxSwapPair.PairInfo memory info = abi.decode(
+        IHippoxSwapPairV1.PairInfo memory info = abi.decode(
             infoBytes,
-            (IHippoxSwapPair.PairInfo)
+            (IHippoxSwapPairV1.PairInfo)
         );
         assertEq(info.token0, address(tokenA));
         assertEq(info.token1, address(tokenB));
@@ -241,7 +241,7 @@ contract HippoxReadTest is Test {
     // Consistency: Pair.getAmountOut == Library.getAmountsOut single hop
     function testPairQuoteConsistentWithRouterSingleHop() public view {
         uint256 amountIn = 500e18;
-        uint256 pairQuote = HippoxSwapPair(pairAB).getAmountOut(
+        uint256 pairQuote = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );
@@ -260,24 +260,24 @@ contract HippoxReadTest is Test {
     // Quote changes when fee or tax changes
     function testQuoteRespondsToFeeAndTaxChanges() public {
         uint256 amountIn = 1000e18;
-        uint256 baseQuote = HippoxSwapPair(pairAB).getAmountOut(
+        uint256 baseQuote = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );
         console.log("base quote (fee=3, tax=10):", baseQuote);
         vm.prank(alice);
-        HippoxSwapPair(pairAB).setFeeNumerator(10); // 1%
-        uint256 higherFeeQuote = HippoxSwapPair(pairAB).getAmountOut(
+        HippoxSwapPairV1(pairAB).setFeeNumerator(10); // 1%
+        uint256 higherFeeQuote = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );
         console.log("higher fee quote (fee=10):", higherFeeQuote);
         assertLt(higherFeeQuote, baseQuote, "higher fee must reduce quote");
         vm.prank(alice);
-        HippoxSwapPair(pairAB).setFeeNumerator(3);
+        HippoxSwapPairV1(pairAB).setFeeNumerator(3);
         vm.prank(alice);
-        HippoxSwapPair(pairAB).setTaxBps(100); // 1%
-        uint256 higherTaxQuote = HippoxSwapPair(pairAB).getAmountOut(
+        HippoxSwapPairV1(pairAB).setTaxBps(100); // 1%
+        uint256 higherTaxQuote = HippoxSwapPairV1(pairAB).getAmountOut(
             amountIn,
             address(tokenA)
         );

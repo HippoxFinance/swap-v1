@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
-/// @title HippoxOracle
+import {IHippoxSwapPairV1} from "./interfaces/IHippoxSwapPairV1.sol";
+/// @title HippoxOracleV1
 /// @notice TWAP oracle reader that stores historical cumulative price snapshots
 ///         and answers queries by `secondsAgo`.
-contract HippoxOracle {
+contract HippoxOracleV1 {
     struct Observation {
         uint40 timestamp;
         uint256 price0Cumulative;
@@ -31,7 +31,7 @@ contract HippoxOracle {
             uint256 price0Cumulative,
             uint256 price1Cumulative,
             uint40 timestamp
-        ) = IHippoxSwapPair(pair).getCumulativePrices();
+        ) = IHippoxSwapPairV1(pair).getCumulativePrices();
         require(timestamp != 0, "ORACLE_NOT_READY");
         uint256 len = observations.length;
         if (len > 0) {
@@ -69,7 +69,7 @@ contract HippoxOracle {
             uint256 price0CumulativeNow,
             uint256 price1CumulativeNow,
             uint40 timestampNow
-        ) = IHippoxSwapPair(pair).getCumulativePrices();
+        ) = IHippoxSwapPairV1(pair).getCumulativePrices();
         uint40 targetTimestamp = timestampNow - secondsAgo;
         (
             Observation memory before,
@@ -110,13 +110,13 @@ contract HippoxOracle {
             uint40 timestamp
         )
     {
-        return IHippoxSwapPair(pair).getCumulativePrices();
+        return IHippoxSwapPairV1(pair).getCumulativePrices();
     }
     function _token0() internal view returns (address) {
-        return IHippoxSwapPair(pair).token0();
+        return IHippoxSwapPairV1(pair).token0();
     }
     function _token1() internal view returns (address) {
-        return IHippoxSwapPair(pair).token1();
+        return IHippoxSwapPairV1(pair).token1();
     }
     function _findObservations(
         uint40 targetTimestamp
