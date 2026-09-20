@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.20;
 // Environment variables
 //
@@ -6,8 +6,8 @@ pragma solidity ^0.8.20;
 //   PRIVATE_KEY             deployer private key
 //   ROBINHOOD_RPC_URL       Robinhood Chain mainnet RPC endpoint
 import {Script, console} from "forge-std/Script.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
 import {WETH} from "../src/WETH.sol";
 /// @title Robinhood_Deploy
 /// @notice Deployment script for the HippoxSwap core contracts on Robinhood Chain mainnet.
@@ -19,8 +19,8 @@ contract Robinhood_Deploy is Script {
     function run()
         external
         returns (
-            HippoxSwapFactory factory,
-            HippoxSwapRouter router,
+            HippoxSwapFactoryV1 factory,
+            HippoxSwapRouterV1 router,
             address weth
         )
     {
@@ -39,8 +39,8 @@ contract Robinhood_Deploy is Script {
         if (verifyOnly) {
             console.log("VERIFY_ONLY is set, skipping broadcast");
             return (
-                HippoxSwapFactory(address(0)),
-                HippoxSwapRouter(payable(address(0))),
+                HippoxSwapFactoryV1(address(0)),
+                HippoxSwapRouterV1(payable(address(0))),
                 WETH_ROBINHOOD
             );
         }
@@ -49,8 +49,8 @@ contract Robinhood_Deploy is Script {
         require(protocolFeePercen <= 50, "PROTOCOL_FEE_TOO_HIGH");
         vm.startBroadcast(deployerKey);
         weth = WETH_ROBINHOOD;
-        factory = new HippoxSwapFactory(owner);
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        factory = new HippoxSwapFactoryV1(owner);
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         vm.stopBroadcast();
         if (deployer == owner) {
             vm.startBroadcast(deployerKey);

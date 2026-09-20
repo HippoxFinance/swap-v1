@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.20;
 // Environment variables
 //
@@ -6,8 +6,8 @@ pragma solidity ^0.8.20;
 //   PRIVATE_KEY             deployer private key
 //   BASE_RPC_URL            Base mainnet RPC endpoint
 import {Script, console} from "forge-std/Script.sol";
-import {HippoxSwapFactory} from "../src/HippoxSwapFactory.sol";
-import {HippoxSwapRouter} from "../src/HippoxSwapRouter.sol";
+import {HippoxSwapFactoryV1} from "../src/HippoxSwapFactoryV1.sol";
+import {HippoxSwapRouterV1} from "../src/HippoxSwapRouterV1.sol";
 import {WETH} from "../src/WETH.sol";
 /// @title Base_Deploy
 /// @notice Deployment script for the HippoxSwap core contracts on Base mainnet.
@@ -21,8 +21,8 @@ contract Base_Deploy is Script {
     function run()
         external
         returns (
-            HippoxSwapFactory factory,
-            HippoxSwapRouter router,
+            HippoxSwapFactoryV1 factory,
+            HippoxSwapRouterV1 router,
             address weth
         )
     {
@@ -47,8 +47,8 @@ contract Base_Deploy is Script {
         if (verifyOnly) {
             console.log("VERIFY_ONLY is set, skipping broadcast");
             return (
-                HippoxSwapFactory(address(0)),
-                HippoxSwapRouter(payable(address(0))),
+                HippoxSwapFactoryV1(address(0)),
+                HippoxSwapRouterV1(payable(address(0))),
                 WETH_BASE
             );
         }
@@ -59,9 +59,9 @@ contract Base_Deploy is Script {
         // Use the canonical WETH on Base. Do not deploy a new one.
         weth = WETH_BASE;
         // Deploy the factory with the configured owner.
-        factory = new HippoxSwapFactory(owner);
+        factory = new HippoxSwapFactoryV1(owner);
         // Deploy the router bound to the factory and WETH.
-        router = new HippoxSwapRouter(address(factory), address(weth));
+        router = new HippoxSwapRouterV1(address(factory), address(weth));
         vm.stopBroadcast();
         // Apply initial protocol fee settings. These calls are broadcast by
         // the owner, so they are executed after the deployment as part of the

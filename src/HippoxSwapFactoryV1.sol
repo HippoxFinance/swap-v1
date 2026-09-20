@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.20;
 import {HippoxSwapPairV1} from "./HippoxSwapPairV1.sol";
 import {IHippoxSwapPairV1} from "./interfaces/IHippoxSwapPairV1.sol";
