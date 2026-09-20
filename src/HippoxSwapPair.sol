@@ -16,6 +16,12 @@ interface IHippoxFlashSwapCallback {
         bytes calldata data
     ) external;
 }
+/// @dev Minimal factory interface used by the pair to read protocol fee
+///      parameters at swap time. Kept minimal to avoid a circular import.
+interface IHippoxSwapFactoryMinimalForPair {
+    function protocolFeeNumerator() external view returns (uint256);
+    function feeTo() external view returns (address);
+}
 /// @title HippoxSwapPair
 /// @notice Constant-product AMM pair for HippoxSwap V1. Holds two token reserves and executes swaps.
 /// @dev Deployed by HippoxSwapFactory via CREATE2, then initialized once.
@@ -23,10 +29,15 @@ interface IHippoxFlashSwapCallback {
 ///      and transfer LP tokens in before burn.
 ///      This version also implements an on-chain native TWAP oracle (Uniswap V2 style cumulative prices),
 ///      an extended hook interface covering initialization and liquidity modification, and flash swaps.
+///      Protocol fee parameters are stored on the factory and read at swap time, so the
+///      factory can adjust them centrally for all pairs.
 contract HippoxSwapPair is ERC20 {
     // State
     IERC20 public token0;
     IERC20 public token1;
+    /// @notice Address of the factory that created this pair.
+    ///         Used to read protocol fee parameters at swap time.
+    address public factory;
     uint112 private reserve0;
     uint112 private reserve1;
     bool private initialized;
@@ -36,14 +47,6 @@ contract HippoxSwapPair is ERC20 {
     uint256 public constant FEE_DENOMINATOR = 1000;
     uint256 public constant MAX_FEE_NUMERATOR = 10;
     uint256 public feeNumerator = DEFAULT_FEE_NUMERATOR;
-    // Protocol fee: a fraction of the AMM fee that goes to feeTo.
-    /// @notice Protocol fee numerator relative to the AMM fee.
-    ///         protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to feeTo.
-    uint256 public constant DEFAULT_PROTOCOL_FEE_NUMERATOR = 0;
-    uint256 public constant MAX_PROTOCOL_FEE_NUMERATOR = 5;
-    uint256 public protocolFeeNumerator = DEFAULT_PROTOCOL_FEE_NUMERATOR;
-    /// @notice Address that receives the protocol fee. Set at initialize.
-    address public feeTo;
     // Roles and trading tax
     address public creator;
     address public admin;
@@ -77,18 +80,13 @@ contract HippoxSwapPair is ERC20 {
         address indexed newRecipient
     );
     event FeeUpdated(uint256 previousFeeNumerator, uint256 newFeeNumerator);
-    event ProtocolFeeUpdated(
-        uint256 previousProtocolFeeNumerator,
-        uint256 newProtocolFeeNumerator
-    );
-    event FeeToUpdated(address indexed previousFeeTo, address indexed newFeeTo);
+    event HookUpdated(address indexed previousHook, address indexed newHook);
+    event HookCallFailed(address indexed hook, string reason);
     event ProtocolFeeCollected(
         address indexed feeTo,
         uint256 amount0,
         uint256 amount1
     );
-    event HookUpdated(address indexed previousHook, address indexed newHook);
-    event HookCallFailed(address indexed hook, string reason);
     event FlashSwap(
         address indexed sender,
         address indexed recipient,
@@ -139,22 +137,23 @@ contract HippoxSwapPair is ERC20 {
     /// @param _creator Address that will own the creator role.
     /// @param _taxRecipient Address that receives the trading tax.
     /// @param _hook Optional hook address, or address(0) for no hook.
-    /// @param _feeTo Address that receives the protocol fee. Usually
-    ///               factory.feeTo() or the creator if factory.feeTo() is zero.
+    /// @param _factory Address of the factory that created this pair. Used to
+    ///                 read protocol fee parameters at swap time.
     function initialize(
         address _token0,
         address _token1,
         address _creator,
         address _taxRecipient,
         address _hook,
-        address _feeTo
+        address _factory
     ) external {
         require(!initialized, "ALREADY_INITIALIZED");
         require(_token0 != address(0) && _token1 != address(0), "ZERO_ADDRESS");
         require(_token0 != _token1, "IDENTICAL_ADDRESSES");
-        // Install the hook before firing initialize callbacks.
+        require(_factory != address(0), "ZERO_FACTORY");
+        // Install the hook and factory before firing initialize callbacks.
         hook = _hook;
-        feeTo = _feeTo;
+        factory = _factory;
         // Build the initialize context before state changes.
         IHippoxSwapHook.InitializeContext memory ctx = IHippoxSwapHook
             .InitializeContext({
@@ -210,25 +209,6 @@ contract HippoxSwapPair is ERC20 {
         feeNumerator = _feeNumerator;
         emit FeeUpdated(previous, _feeNumerator);
     }
-    /// @notice Updates the protocol fee numerator. Only admin.
-    function setProtocolFeeNumerator(
-        uint256 _protocolFeeNumerator
-    ) external onlyAdmin {
-        require(
-            _protocolFeeNumerator <= MAX_PROTOCOL_FEE_NUMERATOR,
-            "PROTOCOL_FEE_TOO_HIGH"
-        );
-        uint256 previous = protocolFeeNumerator;
-        protocolFeeNumerator = _protocolFeeNumerator;
-        emit ProtocolFeeUpdated(previous, _protocolFeeNumerator);
-    }
-    /// @notice Updates the protocol fee recipient. Only admin.
-    function setFeeTo(address _feeTo) external onlyAdmin {
-        require(_feeTo != address(0), "ZERO_ADDRESS");
-        address previous = feeTo;
-        feeTo = _feeTo;
-        emit FeeToUpdated(previous, _feeTo);
-    }
     // Hook management
     /// @notice Sets or clears the hook. Only the creator can call this.
     /// @param _hook New hook address, or address(0) to disable.
@@ -241,6 +221,14 @@ contract HippoxSwapPair is ERC20 {
     /// @notice Returns the current reserves of the pair.
     function getReserves() public view returns (uint112, uint112) {
         return (reserve0, reserve1);
+    }
+    /// @notice Reads the protocol fee numerator from the factory.
+    function protocolFeeNumerator() public view returns (uint256) {
+        return IHippoxSwapFactoryMinimalForPair(factory).protocolFeeNumerator();
+    }
+    /// @notice Reads the protocol fee recipient from the factory.
+    function feeTo() public view returns (address) {
+        return IHippoxSwapFactoryMinimalForPair(factory).feeTo();
     }
     /// @notice Aggregated snapshot of pair state.
     function getPairInfo()
@@ -265,8 +253,8 @@ contract HippoxSwapPair is ERC20 {
             admin: admin,
             minimumLiquidity: MINIMUM_LIQUIDITY,
             hook: hook,
-            protocolFeeNumerator: protocolFeeNumerator,
-            feeTo: feeTo
+            protocolFeeNumerator: protocolFeeNumerator(),
+            feeTo: feeTo()
         });
     }
     /// @notice Single-pool quote including AMM fee and trading tax.
@@ -421,11 +409,11 @@ contract HippoxSwapPair is ERC20 {
     ///      emitted as HookCallFailed events.
     /// @dev The constant-product check is inlined to reduce local variables and
     ///      avoid "stack too deep" at compile time.
-    /// @dev Protocol fee is taken out of the AMM fee. If feeTo is non-zero and
-    ///      protocolFeeNumerator > 0, a portion of the input equal to
-    ///      protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to
-    ///      feeTo. User-visible output is unchanged because the protocol fee
-    ///      comes out of the LP share of the fee, not out of the user's output.
+    /// @dev Protocol fee is taken out of the AMM fee. Protocol fee parameters
+    ///      are read from the factory at swap time, so the factory can adjust
+    ///      them centrally for all pairs. User-visible output is unchanged
+    ///      because the protocol fee comes out of the LP share of the fee,
+    ///      not out of the user's output.
     function swap(
         uint256 amount0Out,
         uint256 amount1Out,
@@ -474,37 +462,44 @@ contract HippoxSwapPair is ERC20 {
             }
         }
         // Protocol fee: a fraction of the AMM fee is sent to feeTo.
+        // Parameters are read from the factory at swap time.
         // It is taken out of the input, so the LP share is reduced but the
         // user-visible output is unchanged.
-        if (
-            protocolFeeNumerator > 0 && feeTo != address(0) && feeNumerator > 0
-        ) {
-            uint256 protocol0;
-            uint256 protocol1;
-            if (amount0In > 0) {
-                uint256 totalFee0 = (amount0In * feeNumerator) /
-                    FEE_DENOMINATOR;
-                protocol0 =
-                    (totalFee0 * protocolFeeNumerator) /
-                    FEE_DENOMINATOR;
-                if (protocol0 > 0) {
-                    token0.transfer(feeTo, protocol0);
-                    balance0 -= protocol0;
+        {
+            uint256 _protocolFeeNumerator = protocolFeeNumerator();
+            address _feeTo = feeTo();
+            if (
+                _protocolFeeNumerator > 0 &&
+                _feeTo != address(0) &&
+                feeNumerator > 0
+            ) {
+                uint256 protocol0;
+                uint256 protocol1;
+                if (amount0In > 0) {
+                    uint256 totalFee0 = (amount0In * feeNumerator) /
+                        FEE_DENOMINATOR;
+                    protocol0 =
+                        (totalFee0 * _protocolFeeNumerator) /
+                        FEE_DENOMINATOR;
+                    if (protocol0 > 0) {
+                        token0.transfer(_feeTo, protocol0);
+                        balance0 -= protocol0;
+                    }
                 }
-            }
-            if (amount1In > 0) {
-                uint256 totalFee1 = (amount1In * feeNumerator) /
-                    FEE_DENOMINATOR;
-                protocol1 =
-                    (totalFee1 * protocolFeeNumerator) /
-                    FEE_DENOMINATOR;
-                if (protocol1 > 0) {
-                    token1.transfer(feeTo, protocol1);
-                    balance1 -= protocol1;
+                if (amount1In > 0) {
+                    uint256 totalFee1 = (amount1In * feeNumerator) /
+                        FEE_DENOMINATOR;
+                    protocol1 =
+                        (totalFee1 * _protocolFeeNumerator) /
+                        FEE_DENOMINATOR;
+                    if (protocol1 > 0) {
+                        token1.transfer(_feeTo, protocol1);
+                        balance1 -= protocol1;
+                    }
                 }
-            }
-            if (protocol0 > 0 || protocol1 > 0) {
-                emit ProtocolFeeCollected(feeTo, protocol0, protocol1);
+                if (protocol0 > 0 || protocol1 > 0) {
+                    emit ProtocolFeeCollected(_feeTo, protocol0, protocol1);
+                }
             }
         }
         // Build the hook context once. reserve0After / reserve1After are
@@ -773,35 +768,42 @@ contract HippoxSwapPair is ERC20 {
             }
         }
         // Protocol fee on flash swap repayment, same logic as the regular swap.
-        if (
-            protocolFeeNumerator > 0 && feeTo != address(0) && feeNumerator > 0
-        ) {
-            uint256 protocol0;
-            uint256 protocol1;
-            if (actualAmount0In > 0) {
-                uint256 totalFee0 = (actualAmount0In * feeNumerator) /
-                    FEE_DENOMINATOR;
-                protocol0 =
-                    (totalFee0 * protocolFeeNumerator) /
-                    FEE_DENOMINATOR;
-                if (protocol0 > 0) {
-                    token0.transfer(feeTo, protocol0);
-                    balance0 -= protocol0;
+        // Parameters are read from the factory at swap time.
+        {
+            uint256 _protocolFeeNumerator = protocolFeeNumerator();
+            address _feeTo = feeTo();
+            if (
+                _protocolFeeNumerator > 0 &&
+                _feeTo != address(0) &&
+                feeNumerator > 0
+            ) {
+                uint256 protocol0;
+                uint256 protocol1;
+                if (actualAmount0In > 0) {
+                    uint256 totalFee0 = (actualAmount0In * feeNumerator) /
+                        FEE_DENOMINATOR;
+                    protocol0 =
+                        (totalFee0 * _protocolFeeNumerator) /
+                        FEE_DENOMINATOR;
+                    if (protocol0 > 0) {
+                        token0.transfer(_feeTo, protocol0);
+                        balance0 -= protocol0;
+                    }
                 }
-            }
-            if (actualAmount1In > 0) {
-                uint256 totalFee1 = (actualAmount1In * feeNumerator) /
-                    FEE_DENOMINATOR;
-                protocol1 =
-                    (totalFee1 * protocolFeeNumerator) /
-                    FEE_DENOMINATOR;
-                if (protocol1 > 0) {
-                    token1.transfer(feeTo, protocol1);
-                    balance1 -= protocol1;
+                if (actualAmount1In > 0) {
+                    uint256 totalFee1 = (actualAmount1In * feeNumerator) /
+                        FEE_DENOMINATOR;
+                    protocol1 =
+                        (totalFee1 * _protocolFeeNumerator) /
+                        FEE_DENOMINATOR;
+                    if (protocol1 > 0) {
+                        token1.transfer(_feeTo, protocol1);
+                        balance1 -= protocol1;
+                    }
                 }
-            }
-            if (protocol0 > 0 || protocol1 > 0) {
-                emit ProtocolFeeCollected(feeTo, protocol0, protocol1);
+                if (protocol0 > 0 || protocol1 > 0) {
+                    emit ProtocolFeeCollected(_feeTo, protocol0, protocol1);
+                }
             }
         }
     }

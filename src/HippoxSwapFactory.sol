@@ -4,17 +4,35 @@ import {HippoxSwapPair} from "./HippoxSwapPair.sol";
 import {IHippoxSwapPair} from "./interfaces/IHippoxSwapPair.sol";
 /// @title HippoxSwapFactory
 /// @notice Creates and indexes one unique pair per token pair. Uses CREATE2 for deterministic addresses.
+///         Also stores the protocol fee parameters so they can be controlled centrally
+///         and applied uniformly to every pair created by this factory.
 contract HippoxSwapFactory {
+    /// @notice Address that receives the protocol fee. Can be updated by feeToSetter.
     address public feeTo;
+    /// @notice Address allowed to update feeTo, feeToSetter, and the protocol fee numerator.
     address public feeToSetter;
     mapping(address => mapping(address => address)) public getPair;
     address[] public allPairs;
+    /// @notice Protocol fee numerator relative to the AMM fee.
+    ///         protocolFeeNumerator / FEE_DENOMINATOR of the AMM fee is sent to feeTo.
+    ///         Stored on the factory so it can be updated centrally and applied
+    ///         to every pair created by this factory.
+    uint256 public constant FEE_DENOMINATOR = 1000;
+    uint256 public constant MAX_PROTOCOL_FEE_NUMERATOR = 5;
+    uint256 public protocolFeeNumerator;
     event PairCreated(
         address indexed token0,
         address indexed token1,
         address pair,
         uint256
     );
+    /// @notice Emitted when the protocol fee numerator changes.
+    event ProtocolFeeNumeratorUpdated(
+        uint256 previousProtocolFeeNumerator,
+        uint256 newProtocolFeeNumerator
+    );
+    /// @notice Emitted when the protocol fee recipient changes.
+    event FeeToUpdated(address indexed previousFeeTo, address indexed newFeeTo);
     constructor(address _feeToSetter) {
         feeToSetter = _feeToSetter;
     }
@@ -41,9 +59,12 @@ contract HippoxSwapFactory {
         return _createPair(tokenA, tokenB, creator, hook);
     }
     /// @dev Internal pair creation shared by both public entry points.
-    ///      Resolves the protocol fee recipient here so the pair can store it
-    ///      at initialize time. If factory.feeTo is zero, the creator receives
-    ///      the protocol fee (same as Uniswap V2 behavior).
+    ///      The protocol fee parameters live on the factory and are read by
+    ///      the pair at swap time, so nothing protocol-fee-related is stored
+    ///      on the pair. The pair stores the factory address so it can look
+    ///      up the parameters on each swap.
+    ///      The trading tax recipient is the creator, so that the trading tax
+    ///      and the protocol fee can be routed to different addresses.
     function _createPair(
         address tokenA,
         address tokenB,
@@ -62,31 +83,48 @@ contract HippoxSwapFactory {
         assembly {
             pair := create2(0, add(bytecode, 32), mload(bytecode), salt)
         }
-        // The protocol fee recipient is the factory-level feeTo if set,
-        // otherwise the creator. This is resolved at pair creation time and
-        // stored on the pair. It can be updated later via setFeeTo on the pair.
-        address protocolFeeRecipient = feeTo == address(0) ? creator : feeTo;
-        // initialize now takes the hook and the protocol fee recipient.
+        // The trading tax recipient is the creator. It can be updated later
+        // via setTaxRecipient on the pair by the pair's admin.
+        address tradingTaxRecipient = creator;
+        // The factory passes its own address to the pair so the pair can read
+        // the protocol fee parameters at swap time.
         HippoxSwapPair(pair).initialize(
             token0,
             token1,
             creator,
-            protocolFeeRecipient,
+            tradingTaxRecipient,
             hook,
-            protocolFeeRecipient
+            address(this)
         );
         getPair[token0][token1] = pair;
         getPair[token1][token0] = pair;
         allPairs.push(pair);
         emit PairCreated(token0, token1, pair, allPairs.length);
     }
+    /// @notice Updates the protocol fee recipient. Only feeToSetter.
     function setFeeTo(address _feeTo) external {
         require(msg.sender == feeToSetter, "FORBIDDEN");
+        address previous = feeTo;
         feeTo = _feeTo;
+        emit FeeToUpdated(previous, _feeTo);
     }
+    /// @notice Updates the feeToSetter. Only feeToSetter.
     function setFeeToSetter(address _feeToSetter) external {
         require(msg.sender == feeToSetter, "FORBIDDEN");
         feeToSetter = _feeToSetter;
+    }
+    /// @notice Updates the protocol fee numerator. Only feeToSetter.
+    /// @dev The new value applies to every pair created by this factory,
+    ///      because pairs read this value at swap time.
+    function setProtocolFeeNumerator(uint256 _protocolFeeNumerator) external {
+        require(msg.sender == feeToSetter, "FORBIDDEN");
+        require(
+            _protocolFeeNumerator <= MAX_PROTOCOL_FEE_NUMERATOR,
+            "PROTOCOL_FEE_TOO_HIGH"
+        );
+        uint256 previous = protocolFeeNumerator;
+        protocolFeeNumerator = _protocolFeeNumerator;
+        emit ProtocolFeeNumeratorUpdated(previous, _protocolFeeNumerator);
     }
     // Extended read functions
     /// @notice Paginated list of pair addresses.

@@ -28,8 +28,16 @@ interface IHippoxSwapPair {
         uint256 amount1In,
         address indexed dataProvider
     );
+    /// @notice Emitted when the protocol fee is collected during a swap.
+    event ProtocolFeeCollected(
+        address indexed feeTo,
+        uint256 amount0,
+        uint256 amount1
+    );
     function token0() external view returns (address);
     function token1() external view returns (address);
+    /// @notice Address of the factory that created this pair.
+    function factory() external view returns (address);
     function getReserves() external view returns (uint112, uint112);
     function mint(address to) external returns (uint256 liquidity);
     function burn(
@@ -56,8 +64,10 @@ interface IHippoxSwapPair {
     function taxRecipient() external view returns (address);
     function feeNumerator() external view returns (uint256);
     /// @notice Protocol fee numerator applied on top of the AMM fee.
+    ///         Read from the factory at swap time.
     function protocolFeeNumerator() external view returns (uint256);
     /// @notice Address that receives the protocol fee.
+    ///         Read from the factory at swap time.
     function feeTo() external view returns (address);
     // Hook views.
     function hook() external view returns (address);
